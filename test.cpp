@@ -586,6 +586,8 @@ namespace ASIOTest {
 				if (config.bufferSwitchCount.has_value()) maxBufferSwitchCount = *config.bufferSwitchCount;
 				else if (!inputFile.has_value()) maxBufferSwitchCount = config.defaultBufferSwitchCount;
 
+				if (maxBufferSwitchCount.has_value() && *maxBufferSwitchCount == 0) setOutcome(Outcome::SUCCESS);
+
 				size_t bufferSwitchCount = 0;
 				const auto incrementBufferSwitchCount = [&] {
 					++bufferSwitchCount;
