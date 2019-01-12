@@ -75,9 +75,11 @@ namespace ASIOTest {
 			::dechamps_cpplog::PreambleLogSink preamble_sink{ thread_safe_sink };
 		};
 
+		static std::optional<LogState> logState;
+
 		::dechamps_cpplog::Logger Log() {
-			static LogState logState;
-			return ::dechamps_cpplog::Logger(&logState.sink());
+			if (!logState.has_value()) abort();
+			return ::dechamps_cpplog::Logger(&logState->sink());
 		}
 
 		ASIOSampleType GetCommonSampleType(const std::vector<ASIOChannelInfo>& channelInfos, const bool input) {
@@ -263,7 +265,14 @@ namespace ASIOTest {
 
 		class ASIOTest {
 		public:
-			ASIOTest(Config config) : config(std::move(config)) {}
+			ASIOTest(Config config) : config(std::move(config)) {
+				if (logState.has_value()) abort();
+				logState.emplace();
+			}
+			~ASIOTest() {
+				if (!logState.has_value()) abort();
+				logState.reset();
+			}
 
 			bool Run() {
 				try {
