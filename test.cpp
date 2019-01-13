@@ -22,6 +22,7 @@
 #include <cxxopts.hpp>
 #pragma warning(pop)
 
+#include <dechamps_cpputil/endian.h>
 #include <dechamps_cpputil/find.h>
 #include <dechamps_cpputil/string.h>
 
@@ -146,14 +147,13 @@ namespace ASIOTest {
 				{ ASIOSTFloat64LSB, SF_FORMAT_DOUBLE | SF_ENDIAN_LITTLE },
 			});
 		}
-		std::optional<ASIOSampleType> SfFormatToASIOSampleType(const int sfFormat) {
-			// TODO: support big endian. Sadly, libsndfile doesn't seem to reliably report endianess when opening a file for reading.
+		std::optional<ASIOSampleType> SfFormatToASIOSampleType(const int sfFormat, ::dechamps_cpputil::Endianness fileEndianness) {
 			return ::dechamps_cpputil::Find(sfFormat & SF_FORMAT_SUBMASK, std::initializer_list<std::pair<int, ASIOSampleType>>{
-				{SF_FORMAT_PCM_16, ASIOSTInt16LSB},
-				{ SF_FORMAT_PCM_24, ASIOSTInt24LSB },
-				{ SF_FORMAT_PCM_32, ASIOSTInt32LSB },
-				{ SF_FORMAT_FLOAT, ASIOSTFloat32LSB },
-				{ SF_FORMAT_DOUBLE, ASIOSTFloat64LSB },
+				{ SF_FORMAT_PCM_16, fileEndianness == ::dechamps_cpputil::Endianness::BIG ? ASIOSTInt16MSB : ASIOSTInt16LSB },
+				{ SF_FORMAT_PCM_24, fileEndianness == ::dechamps_cpputil::Endianness::BIG ? ASIOSTInt24MSB : ASIOSTInt24LSB },
+				{ SF_FORMAT_PCM_32, fileEndianness == ::dechamps_cpputil::Endianness::BIG ? ASIOSTInt32MSB : ASIOSTInt32LSB },
+				{ SF_FORMAT_FLOAT, fileEndianness == ::dechamps_cpputil::Endianness::BIG ? ASIOSTFloat32MSB : ASIOSTFloat32LSB },
+				{ SF_FORMAT_DOUBLE, fileEndianness == ::dechamps_cpputil::Endianness::BIG ? ASIOSTFloat64MSB : ASIOSTFloat64LSB },
 			});
 		}
 
@@ -172,6 +172,13 @@ namespace ASIOTest {
 			return { std::move(sndfile), sfInfo };
 		}
 
+		::dechamps_cpputil::Endianness GetSndfileEndianness(SNDFILE* const sndfile) {
+			const auto result = sf_command(sndfile, SFC_RAW_DATA_NEEDS_ENDSWAP, NULL, 0);
+			if (result == SF_FALSE) return ::dechamps_cpputil::endianness;
+			if (result == SF_TRUE) return ::dechamps_cpputil::OppositeEndianness(::dechamps_cpputil::endianness);
+			throw std::runtime_error(std::string("Unable to determine endianness of sound file: ") + sf_error_number(result));
+		}
+
 		class InputFile {
 		public:
 			InputFile(const std::string_view path) : sndfile(OpenSndfile(path, SFM_READ)) {}
@@ -181,7 +188,7 @@ namespace ASIOTest {
 			void Validate(const int sampleRate, const int channels, const ASIOSampleType sampleType) const {
 				if (sndfile.second.samplerate != sampleRate) throw std::runtime_error("Input file sample rate mismatch: expected " + std::to_string(sampleRate) + ", got " + std::to_string(sndfile.second.samplerate));
 				if (sndfile.second.channels != channels) throw std::runtime_error("Input file channel count mismatch: expected " + std::to_string(channels) + ", got " + std::to_string(sndfile.second.channels));
-				const auto fileSampleType = SfFormatToASIOSampleType(sndfile.second.format);
+				const auto fileSampleType = SfFormatToASIOSampleType(sndfile.second.format, GetSndfileEndianness(sndfile.first.get()));
 				if (!fileSampleType.has_value()) throw std::runtime_error("Unrecognized input file sample type");
 				if (*fileSampleType != sampleType) throw std::runtime_error("Input file sample type mismatch: expected " + ::dechamps_ASIOUtil::GetASIOSampleTypeString(sampleType) + ", got " + ::dechamps_ASIOUtil::GetASIOSampleTypeString(*fileSampleType));
 			}

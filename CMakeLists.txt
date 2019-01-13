@@ -28,6 +28,7 @@ target_link_libraries(ASIOTest
 	PRIVATE dechamps_ASIOUtil::asiosdk_asio
 	PRIVATE dechamps_ASIOUtil::asio
 	PRIVATE dechamps_cpplog::log
+	PRIVATE dechamps_cpputil::endian
 	PRIVATE dechamps_cpputil::find
 	PRIVATE dechamps_cpputil::string
 	PRIVATE cxxopts::cxxopts
