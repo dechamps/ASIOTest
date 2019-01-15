@@ -10,6 +10,7 @@
 #include <vector>
 #include <cstdlib>
 #include <sstream>
+#include <variant>
 
 #include <sndfile.h>
 
@@ -35,6 +36,8 @@ namespace ASIOTest {
 	namespace {
 
 		struct Config {
+			enum class LogMode { NONE, SYNC, ASYNC };
+
 			// Run enough buffer switches such that we can trigger failure modes like https://github.com/dechamps/FlexASIO/issues/29.
 			static constexpr size_t defaultBufferSwitchCount = 30;
 
@@ -42,6 +45,7 @@ namespace ASIOTest {
 			std::optional<size_t> bufferSwitchCount;
 			bool inhibitOutputReady;
 			std::optional<std::string> inputFile;
+			LogMode logMode;
 			std::optional<std::string> outputFile;
 			std::optional<double> sampleRate;
 		};
@@ -49,15 +53,22 @@ namespace ASIOTest {
 		std::optional<Config> GetConfig(int& argc, char**& argv) {
 			cxxopts::Options options("ASIOTest", "ASIO driver test program");
 			Config config;
+			std::string logMode = "async";
 			options.add_options()
 				("buffer-size-frames", "ASIO buffer size to use, in frames; default is to use the preferred size suggested by the driver", cxxopts::value(config.bufferSizeFrames))
 				("buffer-switch-count", "Stop after this many ASIO buffers have been switched; default is to stop when reaching the end of the input file, if any; otherwise, " + std::to_string(config.defaultBufferSwitchCount), cxxopts::value(config.bufferSwitchCount))
 				("inhibit-output-ready", "Don't call ASIOOutputReady() to inform the driver when the output buffer has been filled.", cxxopts::value(config.inhibitOutputReady))
 				("input-file", "Play the specified audio file as untouched raw audio buffers to the ASIO driver.", cxxopts::value(config.inputFile))
+				("log-mode", "How to output the log; can be 'none' (do not output the log, maximum performance), 'sync' (output the log synchronously, useful for debugging crashes) or 'async' (output the log asynchronously, useful to prevent slow output from affecting real time operation); default is '" + logMode + "'", cxxopts::value(logMode))
 				("output-file", "Output recorded untouched raw audio buffers from the ASIO driver to the specified WAV file.", cxxopts::value(config.outputFile))
 				("sample-rate", "ASIO sample rate to use; default is to use the input file sample rate, if any, otherwise the initial sample rate of the driver", cxxopts::value(config.sampleRate));
 			try {
 				options.parse(argc, argv);
+
+				if (logMode == "none") config.logMode = Config::LogMode::NONE;
+				else if (logMode == "sync") config.logMode = Config::LogMode::SYNC;
+				else if (logMode == "async") config.logMode = Config::LogMode::ASYNC;
+				else throw std::runtime_error("Invalid --log-mode setting");
 			}
 			catch (const cxxopts::OptionParseException& exception) {
 				std::cerr << "USAGE ERROR: " << exception.what() << std::endl;
@@ -68,21 +79,36 @@ namespace ASIOTest {
 			return config;
 		}
 
-		class LogState final {
+		class NoneLogState final {
 		public:
-			::dechamps_cpplog::LogSink& sink() { return preamble_sink; }
+			::dechamps_cpplog::LogSink* sink() { return nullptr; }
+		};
+
+		class SyncLogState final {
+		public:
+			::dechamps_cpplog::LogSink* sink() { return &preamble_sink; }
 
 		private:
 			::dechamps_cpplog::StreamLogSink stream_sink{ std::cout };
-			::dechamps_cpplog::AsyncLogSink thread_safe_sink{ stream_sink };
+			::dechamps_cpplog::ThreadSafeLogSink thread_safe_sink{ stream_sink };
 			::dechamps_cpplog::PreambleLogSink preamble_sink{ thread_safe_sink };
 		};
 
-		static std::optional<LogState> logState;
+		class AsyncLogState final {
+		public:
+			::dechamps_cpplog::LogSink* sink() { return &preamble_sink; }
+
+		private:
+			::dechamps_cpplog::StreamLogSink stream_sink{ std::cout };
+			::dechamps_cpplog::AsyncLogSink async_sink{ stream_sink };
+			::dechamps_cpplog::PreambleLogSink preamble_sink{ async_sink };
+		};
+
+		static std::optional<std::variant<NoneLogState, SyncLogState, AsyncLogState>> logState;
 
 		::dechamps_cpplog::Logger Log() {
 			if (!logState.has_value()) abort();
-			return ::dechamps_cpplog::Logger(&logState->sink());
+			return ::dechamps_cpplog::Logger(std::visit([](auto& logState) { return logState.sink(); }, *logState));
 		}
 
 		ASIOSampleType GetCommonSampleType(const std::vector<ASIOChannelInfo>& channelInfos, const bool input) {
@@ -276,7 +302,11 @@ namespace ASIOTest {
 		public:
 			ASIOTest(Config config) : config(std::move(config)) {
 				if (logState.has_value()) abort();
-				logState.emplace();
+				switch (config.logMode) {
+				case Config::LogMode::NONE: logState.emplace(std::in_place_type<NoneLogState>); break;
+				case Config::LogMode::SYNC: logState.emplace(std::in_place_type<SyncLogState>); break;
+				case Config::LogMode::ASYNC: logState.emplace(std::in_place_type<AsyncLogState>); break;
+				}
 			}
 			~ASIOTest() {
 				if (!logState.has_value()) abort();
