@@ -40,6 +40,7 @@ namespace ASIOTest {
 
 			std::optional<long> bufferSizeFrames;
 			std::optional<size_t> bufferSwitchCount;
+			bool inhibitOutputReady;
 			std::optional<std::string> inputFile;
 			std::optional<std::string> outputFile;
 			std::optional<double> sampleRate;
@@ -51,6 +52,7 @@ namespace ASIOTest {
 			options.add_options()
 				("buffer-size-frames", "ASIO buffer size to use, in frames; default is to use the preferred size suggested by the driver", cxxopts::value(config.bufferSizeFrames))
 				("buffer-switch-count", "Stop after this many ASIO buffers have been switched; default is to stop when reaching the end of the input file, if any; otherwise, " + std::to_string(config.defaultBufferSwitchCount), cxxopts::value(config.bufferSwitchCount))
+				("inhibit-output-ready", "Don't call ASIOOutputReady() to inform the driver when the output buffer has been filled.", cxxopts::value(config.inhibitOutputReady))
 				("input-file", "Play the specified audio file as untouched raw audio buffers to the ASIO driver.", cxxopts::value(config.inputFile))
 				("output-file", "Output recorded untouched raw audio buffers from the ASIO driver to the specified WAV file.", cxxopts::value(config.outputFile))
 				("sample-rate", "ASIO sample rate to use; default is to use the input file sample rate, if any, otherwise the initial sample rate of the driver", cxxopts::value(config.sampleRate));
@@ -556,10 +558,6 @@ namespace ASIOTest {
 
 				Log();
 
-				OutputReady();
-
-				Log();
-
 				Callbacks callbacks;
 				callbacks.bufferSwitch = [&](long doubleBufferIndex, ASIOBool directProcess) {
 					Log() << "bufferSwitch(doubleBufferIndex = " << doubleBufferIndex << ", directProcess = " << directProcess << ") called before start!";
@@ -621,6 +619,7 @@ namespace ASIOTest {
 					try {
 						GetSamplePosition();
 						fillOutputBuffer(doubleBufferIndex);
+						if (!config.inhibitOutputReady) OutputReady();
 						if (inputFile.has_value()) {
 							const auto readSize = bufferSizeFrames * ioChannelCounts.second * *inputFileSampleSize;
 							auto interleavedBuffer = inputFile->Read(readSize);
@@ -663,6 +662,12 @@ namespace ASIOTest {
 				Log();
 
 				fillOutputBuffer(1);
+				if (!config.inhibitOutputReady) {
+					OutputReady();
+					GetLatencies();
+					Log();
+				}
+
 				if (!Start()) return false;
 
 				Log();
