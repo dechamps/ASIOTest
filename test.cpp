@@ -613,10 +613,14 @@ namespace ASIOTest {
 					setOutcome(Outcome::SUCCESS);
 				};
 
+				auto fillOutputBuffer = [&](long doubleBufferIndex) {
+					if (outputFile.has_value()) outputFile->Write(MakeInterleavedBuffer(buffers.info, *outputFileSampleSize, bufferSizeFrames, doubleBufferIndex));
+				};
+
 				auto bufferSwitch = [&](long doubleBufferIndex) {
 					try {
 						GetSamplePosition();
-						if (outputFile.has_value()) outputFile->Write(MakeInterleavedBuffer(buffers.info, *outputFileSampleSize, bufferSizeFrames, doubleBufferIndex));
+						fillOutputBuffer(doubleBufferIndex);
 						if (inputFile.has_value()) {
 							const auto readSize = bufferSizeFrames * ioChannelCounts.second * *inputFileSampleSize;
 							auto interleavedBuffer = inputFile->Read(readSize);
@@ -658,6 +662,7 @@ namespace ASIOTest {
 
 				Log();
 
+				fillOutputBuffer(1);
 				if (!Start()) return false;
 
 				Log();
