@@ -60,7 +60,7 @@ namespace ASIOTest {
 				("inhibit-output-ready", "Don't call ASIOOutputReady() to inform the driver when the output buffer has been filled.", cxxopts::value(config.inhibitOutputReady))
 				("input-file", "Play the specified audio file as untouched raw audio buffers to the ASIO driver.", cxxopts::value(config.inputFile))
 				("log-mode", "How to output the log; can be 'none' (do not output the log, maximum performance), 'sync' (output the log synchronously, useful for debugging crashes) or 'async' (output the log asynchronously, useful to prevent slow output from affecting real time operation); default is '" + logMode + "'", cxxopts::value(logMode))
-				("output-file", "Output recorded untouched raw audio buffers from the ASIO driver to the specified WAV file.", cxxopts::value(config.outputFile))
+				("output-file", "Output recorded untouched raw audio buffers from the ASIO driver to the specified file; output format is WAV for little-endian sample types (ASIOST*LSB), AIFF for big-endian sample types (ASIOST*MSB).", cxxopts::value(config.outputFile))
 				("sample-rate", "ASIO sample rate to use; default is to use the input file sample rate, if any, otherwise the initial sample rate of the driver", cxxopts::value(config.sampleRate));
 			try {
 				options.parse(argc, argv);
@@ -265,7 +265,11 @@ namespace ASIOTest {
 				SF_INFO sfInfo = { 0 };
 				sfInfo.samplerate = sampleRate;
 				sfInfo.channels = channels;
-				sfInfo.format = SF_FORMAT_WAVEX | *sfFormat;
+				switch (*sfFormat & SF_FORMAT_ENDMASK) {
+				case SF_ENDIAN_LITTLE: sfInfo.format = SF_FORMAT_WAVEX | *sfFormat; break;
+				case SF_ENDIAN_BIG: sfInfo.format = SF_FORMAT_AIFF | *sfFormat; break;
+				default: abort();
+				}
 				return sfInfo;
 			}
 
