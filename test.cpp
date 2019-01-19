@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <chrono>
 #include <iostream>
 #include <functional>
 #include <mutex>
 #include <optional>
 #include <string_view>
+#include <thread>
 #include <vector>
 #include <cstdlib>
 #include <sstream>
@@ -43,6 +45,7 @@ namespace ASIOTest {
 
 			std::optional<long> bufferSizeFrames;
 			std::optional<size_t> bufferSwitchCount;
+			double bufferSwitchDelayMs = 0;
 			bool inhibitOutputReady;
 			std::optional<std::string> inputFile;
 			LogMode logMode;
@@ -57,6 +60,7 @@ namespace ASIOTest {
 			options.add_options()
 				("buffer-size-frames", "ASIO buffer size to use, in frames; default is to use the preferred size suggested by the driver", cxxopts::value(config.bufferSizeFrames))
 				("buffer-switch-count", "Stop after this many ASIO buffers have been switched; default is to stop when reaching the end of the input file, if any; otherwise, " + std::to_string(config.defaultBufferSwitchCount), cxxopts::value(config.bufferSwitchCount))
+				("buffer-switch-delay-ms", "Sleep for this many milliseconds before processing a buffer switch callback; default is " + std::to_string(config.bufferSwitchDelayMs), cxxopts::value(config.bufferSwitchDelayMs))
 				("inhibit-output-ready", "Don't call ASIOOutputReady() to inform the driver when the output buffer has been filled.", cxxopts::value(config.inhibitOutputReady))
 				("input-file", "Play the specified audio file as untouched raw audio buffers to the ASIO driver.", cxxopts::value(config.inputFile))
 				("log-mode", "How to output the log; can be 'none' (do not output the log, maximum performance), 'sync' (output the log synchronously, useful for debugging crashes) or 'async' (output the log asynchronously, useful to prevent slow output from affecting real time operation); default is '" + logMode + "'", cxxopts::value(logMode))
@@ -652,6 +656,12 @@ namespace ASIOTest {
 				auto bufferSwitch = [&](long doubleBufferIndex) {
 					try {
 						GetSamplePosition();
+						
+						if (config.bufferSwitchDelayMs > 0) {
+							Log() << "Sleeping for " << config.bufferSwitchDelayMs << " milliseconds";
+							std::this_thread::sleep_for(std::chrono::duration<decltype(config.bufferSwitchDelayMs), std::milli>(config.bufferSwitchDelayMs));
+						}
+
 						fillOutputBuffer(doubleBufferIndex);
 						if (!config.inhibitOutputReady) OutputReady();
 						if (inputFile.has_value()) {
