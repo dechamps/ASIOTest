@@ -650,7 +650,10 @@ namespace ASIOTest {
 				};
 
 				auto fillOutputBuffer = [&](long doubleBufferIndex) {
-					if (outputFile.has_value()) outputFile->Write(MakeInterleavedBuffer(buffers.info, *outputFileSampleSize, bufferSizeFrames, doubleBufferIndex));
+					if (outputFile.has_value()) {
+						Log() << "Writing buffer to output file";
+						outputFile->Write(MakeInterleavedBuffer(buffers.info, *outputFileSampleSize, bufferSizeFrames, doubleBufferIndex));
+					}
 				};
 
 				auto bufferSwitch = [&](long doubleBufferIndex) {
@@ -665,6 +668,7 @@ namespace ASIOTest {
 						fillOutputBuffer(doubleBufferIndex);
 						if (!config.inhibitOutputReady) OutputReady();
 						if (inputFile.has_value()) {
+							Log() << "Reading buffer from input file";
 							const auto readSize = bufferSizeFrames * ioChannelCounts.second * *inputFileSampleSize;
 							auto interleavedBuffer = inputFile->Read(readSize);
 							if (interleavedBuffer.size() < readSize) {
