@@ -64,9 +64,9 @@ namespace ASIOTest {
 				("buffer-switch-count", "Stop after this many ASIO buffers have been switched; default is to stop when reaching the end of the input file, if any; otherwise, " + std::to_string(config.defaultBufferSwitchCount), cxxopts::value(config.bufferSwitchCount))
 				("buffer-switch-delay-ms", "Sleep for this many milliseconds before processing a buffer switch callback; default is " + std::to_string(config.bufferSwitchDelayMs), cxxopts::value(config.bufferSwitchDelayMs))
 				("inhibit-output-ready", "Don't call ASIOOutputReady() to inform the driver when the output buffer has been filled.", cxxopts::value(config.inhibitOutputReady))
-				("input-file", "Play the specified audio file as untouched raw audio buffers to the ASIO driver.", cxxopts::value(config.inputFile))
+				("input-file", "Preload the specified audio file, then play the untouched raw audio buffers to the ASIO driver.", cxxopts::value(config.inputFile))
 				("log-mode", "How to output the log; can be 'none' (do not output the log, maximum performance), 'sync' (output the log synchronously, useful for debugging crashes) or 'async' (output the log asynchronously, useful to prevent slow output from affecting real time operation); default is '" + logMode + "'", cxxopts::value(logMode))
-				("output-file", "Output recorded untouched raw audio buffers from the ASIO driver to the specified file; output format is WAV for little-endian sample types (ASIOST*LSB), AIFF for big-endian sample types (ASIOST*MSB).", cxxopts::value(config.outputFile))
+				("output-file", "Record untouched raw audio buffers from the ASIO driver, then write them to the specified file; output format is WAV for little-endian sample types (ASIOST*LSB), AIFF for big-endian sample types (ASIOST*MSB).", cxxopts::value(config.outputFile))
 				("sample-rate", "ASIO sample rate to use; default is to use the input file sample rate, if any, otherwise the initial sample rate of the driver", cxxopts::value(config.sampleRate));
 			try {
 				options.parse(argc, argv);
@@ -155,42 +155,6 @@ namespace ASIOTest {
 			return *sampleType;
 		}
 
-		std::vector<uint8_t> MakeInterleavedBuffer(std::vector<ASIOBufferInfo> bufferInfos, size_t sampleSize, long bufferSize, long doubleBufferIndex) {
-			const auto inputEnd = std::stable_partition(bufferInfos.begin(), bufferInfos.end(), [](const ASIOBufferInfo& bufferInfo) { return bufferInfo.isInput;  });
-			bufferInfos.resize(inputEnd - bufferInfos.begin());
-
-			std::vector<uint8_t> interleavedBuffer(bufferSize * bufferInfos.size() * sampleSize);
-
-			uint8_t* interleavedPtr = &interleavedBuffer.front();
-			while (bufferSize > 0) {
-				for (auto& bufferInfo : bufferInfos) {
-					auto& buffer = bufferInfo.buffers[doubleBufferIndex];
-					memcpy(interleavedPtr, buffer, sampleSize);
-					buffer = static_cast<uint8_t*>(buffer) + sampleSize;
-					interleavedPtr += sampleSize;
-				}
-				--bufferSize;
-			}
-			if (interleavedPtr != &interleavedBuffer.front() + interleavedBuffer.size()) abort();
-			return interleavedBuffer;
-		}
-
-		void CopyInterleavedBufferToASIO(const std::vector<uint8_t>& interleavedBuffer, std::vector<ASIOBufferInfo> bufferInfos, const size_t sampleSize, const long doubleBufferIndex) {
-			const auto outputEnd = std::stable_partition(bufferInfos.begin(), bufferInfos.end(), [](const ASIOBufferInfo& bufferInfo) { return !bufferInfo.isInput; });
-			bufferInfos.resize(outputEnd - bufferInfos.begin());
-
-			if (interleavedBuffer.size() % (bufferInfos.size() * sampleSize) != 0) abort();
-
-			for (auto interleavedBufferIt = interleavedBuffer.begin(); interleavedBufferIt < interleavedBuffer.end(); ) {
-				for (auto& bufferInfo : bufferInfos) {
-					auto& buffer = bufferInfo.buffers[doubleBufferIndex];
-					memcpy(buffer, &*interleavedBufferIt, sampleSize);
-					buffer = static_cast<uint8_t*>(buffer) + sampleSize;
-					interleavedBufferIt += sampleSize;
-				}
-			}
-		}
-
 		std::optional<int> ASIOSampleTypeToSfFormatType(const ASIOSampleType sampleType) {
 			return ::dechamps_cpputil::Find(sampleType, std::initializer_list<std::pair<ASIOSampleType, int>>{
 				{ASIOSTInt16MSB, SF_FORMAT_PCM_16 | SF_ENDIAN_BIG},
@@ -251,22 +215,20 @@ namespace ASIOTest {
 				if (*fileSampleType != sampleType) throw std::runtime_error("Input file sample type mismatch: expected " + ::dechamps_ASIOUtil::GetASIOSampleTypeString(sampleType) + ", got " + ::dechamps_ASIOUtil::GetASIOSampleTypeString(*fileSampleType));
 			}
 
-			std::vector<uint8_t> Read(size_t bytes) {
-				std::vector<uint8_t> interleavedBuffer(bytes);
-				for (auto bufferIt = interleavedBuffer.begin(); bufferIt < interleavedBuffer.end(); ) {
-					const auto bytesToRead = interleavedBuffer.end() - bufferIt;
-					const auto bytesRead = sf_read_raw(sndfile.first.get(), &*bufferIt, bytesToRead);
-					if (bytesRead <= 0 || bytesRead > bytesToRead) {
+			std::vector<uint8_t> Read() {
+				constexpr auto readSizeBytes = 4096;
+				std::vector<uint8_t> data;
+				for (;;) {
+					data.resize(data.size() + readSizeBytes);
+					const auto bytesRead = sf_read_raw(sndfile.first.get(), data.data() + data.size() - readSizeBytes, readSizeBytes);
+					if (bytesRead <= 0 || bytesRead > readSizeBytes) {
 						const auto sfError = sf_error(sndfile.first.get());
-						if (sfError == SF_ERR_NO_ERROR) {
-							interleavedBuffer.resize(bufferIt - interleavedBuffer.begin());
-							break;
-						}
-						throw std::runtime_error(std::string("Unable to read input file: ") + sf_error_number(sfError));
+						if (bytesRead != 0 || sfError != SF_ERR_NO_ERROR) throw std::runtime_error(std::string("Unable to read input file: ") + sf_error_number(sfError));
 					}
-					bufferIt += int(bytesRead);
+					data.resize(data.size() - readSizeBytes + size_t(bytesRead));
+					if (bytesRead == 0) break;
 				}
-				return interleavedBuffer;
+				return data;
 			}
 
 		private:
@@ -576,38 +538,39 @@ namespace ASIOTest {
 
 				auto targetSampleRate = config.sampleRate;
 
-				std::optional<InputFile> inputFile;
-				std::optional<size_t> inputFileSampleSize;
+				std::optional<std::vector<uint8_t>> inputData;
+				std::optional<size_t> inputSampleSize;
 				if (config.inputFile.has_value()) {
-					try {
-						const auto inputSampleType = GetCommonSampleType(channelInfos, /*input=*/false);
-						inputFileSampleSize = ::dechamps_ASIOUtil::GetASIOSampleSize(inputSampleType);
-						if (!inputFileSampleSize.has_value()) throw std::runtime_error("Cannot determine size of sample type " + ::dechamps_ASIOUtil::GetASIOSampleTypeString(inputSampleType));
-						inputFile.emplace(*config.inputFile);
-						const auto inputFileSampleRate = inputFile->SampleRate();
-						if (!targetSampleRate.has_value()) targetSampleRate = inputFileSampleRate;
-						inputFile->Validate(int(*targetSampleRate), ioChannelCounts.second, inputSampleType);
+					const auto inputSampleType = GetCommonSampleType(channelInfos, /*input=*/false);
+					inputSampleSize = ::dechamps_ASIOUtil::GetASIOSampleSize(inputSampleType);
+					if (!inputSampleSize.has_value()) throw std::runtime_error("Cannot determine size of input sample type " + ::dechamps_ASIOUtil::GetASIOSampleTypeString(inputSampleType));
 
+					Log() << "Loading input file";
+					try {
+						InputFile inputFile(*config.inputFile);
+						const auto inputFileSampleRate = inputFile.SampleRate();
+						if (!targetSampleRate.has_value()) targetSampleRate = inputFileSampleRate;
+						inputFile.Validate(int(*targetSampleRate), ioChannelCounts.second, inputSampleType);
+
+						inputData = inputFile.Read();
 					}
 					catch (const std::exception& exception) {
 						throw std::runtime_error(std::string("Cannot input from file: ") + exception.what());
 					}
+					Log() << "Input file loading complete (" << inputData->size() << " bytes)";
+					Log();
 				}
 
 				if (!targetSampleRate.has_value()) targetSampleRate = *initialSampleRate;
 
-				std::optional<OutputFile> outputFile;
-				std::optional<size_t> outputFileSampleSize;
+				std::optional<std::vector<uint8_t>> outputData;
+				std::optional<ASIOSampleType> outputSampleType;
+				std::optional<size_t> outputSampleSize;
 				if (config.outputFile.has_value()) {
-					try {
-						const auto outputSampleType = GetCommonSampleType(channelInfos, /*input=*/true);
-						outputFileSampleSize = ::dechamps_ASIOUtil::GetASIOSampleSize(outputSampleType);
-						if (!outputFileSampleSize.has_value()) throw std::runtime_error("Cannot determine size of sample type " + ::dechamps_ASIOUtil::GetASIOSampleTypeString(outputSampleType));
-						outputFile.emplace(*config.outputFile, int(*targetSampleRate), ioChannelCounts.first, outputSampleType);
-					}
-					catch (const std::exception& exception) {
-						throw std::runtime_error(std::string("Cannot output to file: ") + exception.what());
-					}
+					outputSampleType = GetCommonSampleType(channelInfos, /*input=*/true);
+					outputSampleSize = ::dechamps_ASIOUtil::GetASIOSampleSize(*outputSampleType);
+					if (!outputSampleSize.has_value()) throw std::runtime_error("Cannot determine size of output sample type " + ::dechamps_ASIOUtil::GetASIOSampleTypeString(*outputSampleType));
+					outputData.emplace();
 				}
 
 				if (!CanSampleRate(*targetSampleRate)) return false;
@@ -619,6 +582,27 @@ namespace ASIOTest {
 				const auto bufferSize = GetBufferSize();
 				if (!bufferSize.has_value()) return false;
 				const auto bufferSizeFrames = config.bufferSizeFrames.has_value() ? *config.bufferSizeFrames : bufferSize->preferred;
+
+				size_t maxBufferSwitchCount = config.defaultBufferSwitchCount;
+				if (config.bufferSwitchCount.has_value()) maxBufferSwitchCount = *config.bufferSwitchCount;
+				else if (inputData.has_value()) {
+					const auto frameSize = *inputSampleSize * ioChannelCounts.second;
+					if (inputData->size() % frameSize != 0) throw std::runtime_error("Input ends in the middle of a frame");
+					const auto inputSizeInFrames = inputData->size() / frameSize;
+					maxBufferSwitchCount = inputSizeInFrames / bufferSizeFrames;
+					if (inputSizeInFrames % bufferSizeFrames != 0) ++maxBufferSwitchCount;
+				}
+				else maxBufferSwitchCount = config.defaultBufferSwitchCount;
+				Log() << "Will stop after " << maxBufferSwitchCount << " buffer switches";
+
+				if (inputData.has_value()) {
+					const auto inputFrameSize = *inputSampleSize * ioChannelCounts.second;
+					inputData->resize(inputFrameSize * bufferSizeFrames * maxBufferSwitchCount);
+				}
+				if (outputData.has_value()) {
+					const auto outputFrameSize = *outputSampleSize * ioChannelCounts.first;
+					outputData->reserve(outputFrameSize * bufferSizeFrames * maxBufferSwitchCount);
+				}
 
 				Log();
 
@@ -660,26 +644,26 @@ namespace ASIOTest {
 					outcomeCondition.notify_all();
 				};
 
-				std::optional<size_t> maxBufferSwitchCount;
-				if (config.bufferSwitchCount.has_value()) maxBufferSwitchCount = *config.bufferSwitchCount;
-				else if (!inputFile.has_value()) maxBufferSwitchCount = config.defaultBufferSwitchCount;
-
-				if (maxBufferSwitchCount.has_value() && *maxBufferSwitchCount == 0) setOutcome(Outcome::SUCCESS);
+				if (maxBufferSwitchCount == 0) setOutcome(Outcome::SUCCESS);
 
 				size_t bufferSwitchCount = 0;
 				const auto incrementBufferSwitchCount = [&] {
 					++bufferSwitchCount;
-					Log() << "Buffer switch count: " << bufferSwitchCount;
-					if (!maxBufferSwitchCount.has_value() || bufferSwitchCount < *maxBufferSwitchCount) return;
-					Log() << "Reached buffer switch count limit (" << *maxBufferSwitchCount << ")";
-					setOutcome(Outcome::SUCCESS);
+					Log() << "Buffer switch count: " << bufferSwitchCount << "/" << maxBufferSwitchCount;
+					if (bufferSwitchCount >= maxBufferSwitchCount) setOutcome(Outcome::SUCCESS);
 				};
 
-				auto fillOutputBuffer = [&](long doubleBufferIndex) {
-					if (outputFile.has_value()) {
-						Log() << "Writing buffer to output file";
-						outputFile->Write(MakeInterleavedBuffer(buffers.info, *outputFileSampleSize, bufferSizeFrames, doubleBufferIndex));
-					}
+				auto playback = [&](long doubleBufferIndex) {
+					if (!inputData.has_value() || bufferSwitchCount >= maxBufferSwitchCount) return;
+					const auto interleavedBufferSizeInBytes = ioChannelCounts.second * bufferSizeFrames * *inputSampleSize;
+					const auto inputStart = inputData->data() + bufferSwitchCount * interleavedBufferSizeInBytes;
+					::dechamps_ASIOUtil::CopyFromInterleavedBuffer(buffers.info, false, *inputSampleSize, bufferSizeFrames, doubleBufferIndex, inputStart, ioChannelCounts.second);
+				};
+				auto record = [&](long doubleBufferIndex) {
+					if (!outputData.has_value()) return;
+					const auto interleavedBufferSizeInBytes = ioChannelCounts.first * bufferSizeFrames * *outputSampleSize;
+					outputData->resize(outputData->size() + interleavedBufferSizeInBytes);
+					::dechamps_ASIOUtil::CopyToInterleavedBuffer(buffers.info, true, *outputSampleSize, bufferSizeFrames, doubleBufferIndex, outputData->data() + outputData->size() - interleavedBufferSizeInBytes, ioChannelCounts.first);
 				};
 
 				auto bufferSwitch = [&](long doubleBufferIndex) {
@@ -691,19 +675,10 @@ namespace ASIOTest {
 							std::this_thread::sleep_for(std::chrono::duration<decltype(config.bufferSwitchDelayMs), std::milli>(config.bufferSwitchDelayMs));
 						}
 
-						fillOutputBuffer(doubleBufferIndex);
+						playback(doubleBufferIndex);
 						if (!config.inhibitOutputReady) OutputReady();
-						if (inputFile.has_value()) {
-							Log() << "Reading buffer from input file";
-							const auto readSize = bufferSizeFrames * ioChannelCounts.second * *inputFileSampleSize;
-							auto interleavedBuffer = inputFile->Read(readSize);
-							if (interleavedBuffer.size() < readSize) {
-								Log() << "Reached end of input file";
-								interleavedBuffer.resize(readSize);
-								if (!maxBufferSwitchCount.has_value()) setOutcome(Outcome::SUCCESS);
-							}
-							CopyInterleavedBufferToASIO(interleavedBuffer, buffers.info, *inputFileSampleSize, doubleBufferIndex);
-						}
+						record(doubleBufferIndex);
+
 						incrementBufferSwitchCount();
 					}
 					catch (const std::exception& exception) {
@@ -735,7 +710,7 @@ namespace ASIOTest {
 
 				Log();
 
-				fillOutputBuffer(1);
+				playback(1);
 				if (!config.inhibitOutputReady) {
 					OutputReady();
 					GetLatencies();
@@ -759,6 +734,19 @@ namespace ASIOTest {
 				Log();
 
 				if (!Stop()) return false;
+
+				if (outputData.has_value()) {
+					Log() << "Writing output file (" << outputData->size() << " bytes)";
+					try {
+						OutputFile outputFile(*config.outputFile, int(*targetSampleRate), ioChannelCounts.first, *outputSampleType);
+						outputFile.Write(*outputData);
+					}
+					catch (const std::exception& exception) {
+						throw std::runtime_error(std::string("Cannot output to file: ") + exception.what());
+					}
+					Log() << "Output file writing complete";
+					Log();
+				}
 
 				// Note: we don't call ASIOExit() because it gets confused by our driver setup trickery (see InitAndRun()).
 				return outcome == Outcome::SUCCESS;
