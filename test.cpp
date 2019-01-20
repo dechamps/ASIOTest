@@ -762,7 +762,6 @@ namespace ASIOTest {
 				if (!Stop()) return false;
 
 				// Note: we don't call ASIOExit() because it gets confused by our driver setup trickery (see InitAndRun()).
-				// That said, this doesn't really matter because ASIOExit() is basically a no-op in our case, anyway.
 				return true;
 			}
 
