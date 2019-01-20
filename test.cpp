@@ -754,7 +754,6 @@ namespace ASIOTest {
 					});
 					std::unique_lock outcomeLock(outcomeMutex);
 					outcomeCondition.wait(outcomeLock, [&] { return outcome.has_value();  });
-					if (outcome != Outcome::SUCCESS) return false;
 				}
 
 				Log();
@@ -762,7 +761,7 @@ namespace ASIOTest {
 				if (!Stop()) return false;
 
 				// Note: we don't call ASIOExit() because it gets confused by our driver setup trickery (see InitAndRun()).
-				return true;
+				return outcome == Outcome::SUCCESS;
 			}
 
 			const Config config;
