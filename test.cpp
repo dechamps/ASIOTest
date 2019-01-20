@@ -601,7 +601,9 @@ namespace ASIOTest {
 				}
 				if (outputData.has_value()) {
 					const auto outputFrameSize = *outputSampleSize * ioChannelCounts.first;
-					outputData->reserve(outputFrameSize * bufferSizeFrames * maxBufferSwitchCount);
+					// Fill the memory to force the operating system to actually commit the pages.
+					outputData->resize(outputFrameSize * bufferSizeFrames * maxBufferSwitchCount, 0x88);
+					outputData->clear();
 				}
 
 				Log();
