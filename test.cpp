@@ -31,6 +31,8 @@
 
 #include <dechamps_cpplog/log.h>
 
+#include <windows.h>
+
 // The global ASIO driver pointer that the ASIO host library internally uses.
 extern IASIO* theAsioDriver;
 
@@ -114,6 +116,30 @@ namespace ASIOTest {
 			if (!logState.has_value()) abort();
 			return ::dechamps_cpplog::Logger(std::visit([](auto& logState) { return logState.sink(); }, *logState));
 		}
+
+		class ConsoleCtrlHandler {
+		public:
+			ConsoleCtrlHandler(std::function<BOOL(DWORD)> handler) : handler(std::move(handler)) {
+				if (global != nullptr) abort();
+				global = this;
+				SetConsoleCtrlHandler(Handle, /*Add=*/TRUE);
+			}
+			~ConsoleCtrlHandler() {
+				if (global != this) abort();
+				SetConsoleCtrlHandler(Handle, /*Add=*/FALSE);
+				global = nullptr;
+			}
+
+		private:
+			static BOOL WINAPI Handle(DWORD dwCtrlType) {
+				if (global == nullptr) abort();
+				return global->handler(dwCtrlType);
+			}
+
+			static ConsoleCtrlHandler* global;
+			std::function<BOOL(DWORD)> handler;
+		};
+		ConsoleCtrlHandler* ConsoleCtrlHandler::global = nullptr;
 
 		ASIOSampleType GetCommonSampleType(const std::vector<ASIOChannelInfo>& channelInfos, const bool input) {
 			std::optional<ASIOSampleType> sampleType;
@@ -721,6 +747,11 @@ namespace ASIOTest {
 				Log();
 
 				{
+					ConsoleCtrlHandler consoleCtrlHandler([&](DWORD) {
+						Log() << "Caught control signal, aborting";
+						setOutcome(Outcome::FAILURE);
+						return TRUE;
+					});
 					std::unique_lock outcomeLock(outcomeMutex);
 					outcomeCondition.wait(outcomeLock, [&] { return outcome.has_value();  });
 					if (outcome != Outcome::SUCCESS) return false;
