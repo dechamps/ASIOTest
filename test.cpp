@@ -655,10 +655,10 @@ namespace ASIOTest {
 					if (bufferSwitchCount >= maxBufferSwitchCount) setOutcome(Outcome::SUCCESS);
 				};
 
-				auto playback = [&](long doubleBufferIndex) {
-					if (!inputData.has_value() || bufferSwitchCount >= maxBufferSwitchCount) return;
+				auto playback = [&](long doubleBufferIndex, size_t bufferOffset) {
+					if (!inputData.has_value() || bufferOffset >= maxBufferSwitchCount) return;
 					const auto interleavedBufferSizeInBytes = ioChannelCounts.second * bufferSizeFrames * *inputSampleSize;
-					const auto inputStart = inputData->data() + bufferSwitchCount * interleavedBufferSizeInBytes;
+					const auto inputStart = inputData->data() + bufferOffset * interleavedBufferSizeInBytes;
 					::dechamps_ASIOUtil::CopyFromInterleavedBuffer(buffers.info, false, *inputSampleSize, bufferSizeFrames, doubleBufferIndex, inputStart, ioChannelCounts.second);
 				};
 				auto record = [&](long doubleBufferIndex) {
@@ -677,7 +677,7 @@ namespace ASIOTest {
 							std::this_thread::sleep_for(std::chrono::duration<decltype(config.bufferSwitchDelayMs), std::milli>(config.bufferSwitchDelayMs));
 						}
 
-						playback(doubleBufferIndex);
+						playback(doubleBufferIndex, bufferSwitchCount + 1);  // +1 because the first buffer was provided before the first call to bufferSwitch()
 						if (!config.inhibitOutputReady) OutputReady();
 						record(doubleBufferIndex);
 
@@ -712,7 +712,7 @@ namespace ASIOTest {
 
 				Log();
 
-				playback(1);
+				playback(1, 0);
 				if (!config.inhibitOutputReady) {
 					OutputReady();
 					GetLatencies();
