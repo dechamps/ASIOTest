@@ -76,7 +76,7 @@ namespace ASIOTest {
 				else if (logMode == "async") config.logMode = Config::LogMode::ASYNC;
 				else throw std::runtime_error("Invalid --log-mode setting");
 			}
-			catch (const cxxopts::OptionParseException& exception) {
+			catch (const std::exception& exception) {
 				std::cerr << "USAGE ERROR: " << exception.what() << std::endl;
 				std::cerr << std::endl;
 				std::cerr << options.help() << std::endl;
