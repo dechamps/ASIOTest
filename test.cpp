@@ -330,7 +330,12 @@ namespace ASIOTest {
 				return asioDriverInfo;
 			}
 
-			std::pair<long, long> GetChannels() {
+			struct ChannelCounts {
+				long input;
+				long output;
+			};
+
+			ChannelCounts GetChannels() {
 				Log() << "ASIOGetChannels()";
 				long numInputChannels, numOutputChannels;
 				const auto error = PrintError(ASIOGetChannels(&numInputChannels, &numOutputChannels));
@@ -389,13 +394,13 @@ namespace ASIOTest {
 				return channelInfo;
 			}
 
-			std::vector<ASIOChannelInfo> GetAllChannelInfo(std::pair<long, long> ioChannelCounts) {
+			std::vector<ASIOChannelInfo> GetAllChannelInfo(ChannelCounts channelCounts) {
 				std::vector<ASIOChannelInfo> channelInfos;
-				for (long inputChannel = 0; inputChannel < ioChannelCounts.first; ++inputChannel) {
+				for (long inputChannel = 0; inputChannel < channelCounts.input; ++inputChannel) {
 					const auto channelInfo = GetChannelInfo(inputChannel, true);
 					if (channelInfo.has_value()) channelInfos.push_back(*channelInfo);
 				}
-				for (long outputChannel = 0; outputChannel < ioChannelCounts.second; ++outputChannel) {
+				for (long outputChannel = 0; outputChannel < channelCounts.output; ++outputChannel) {
 					const auto channelInfo = GetChannelInfo(outputChannel, false);
 					if (channelInfo.has_value()) channelInfos.push_back(*channelInfo);
 				}
@@ -418,14 +423,14 @@ namespace ASIOTest {
 			};
 
 			// TODO: we should also test with not all channels active.
-			Buffers CreateBuffers(std::pair<long, long> ioChannelCounts, long bufferSize, ASIOCallbacks callbacks) {
+			Buffers CreateBuffers(ChannelCounts channelCounts, long bufferSize, ASIOCallbacks callbacks) {
 				std::vector<ASIOBufferInfo> bufferInfos;
-				for (long inputChannel = 0; inputChannel < ioChannelCounts.first; ++inputChannel) {
+				for (long inputChannel = 0; inputChannel < channelCounts.input; ++inputChannel) {
 					auto& bufferInfo = bufferInfos.emplace_back();
 					bufferInfo.isInput = true;
 					bufferInfo.channelNum = inputChannel;
 				}
-				for (long outputChannel = 0; outputChannel < ioChannelCounts.second; ++outputChannel) {
+				for (long outputChannel = 0; outputChannel < channelCounts.output; ++outputChannel) {
 					auto& bufferInfo = bufferInfos.emplace_back();
 					bufferInfo.isInput = false;
 					bufferInfo.channelNum = outputChannel;
@@ -514,8 +519,8 @@ namespace ASIOTest {
 
 				Log();
 
-				const auto ioChannelCounts = GetChannels();
-				if (ioChannelCounts.first == 0 && ioChannelCounts.second == 0) return false;
+				const auto channelCounts = GetChannels();
+				if (channelCounts.input == 0 && channelCounts.output == 0) return false;
 
 				Log();
 
@@ -531,8 +536,8 @@ namespace ASIOTest {
 
 				Log();
 
-				const auto channelInfos = GetAllChannelInfo(ioChannelCounts);
-				if (long(channelInfos.size()) != ioChannelCounts.first + ioChannelCounts.second) return false;
+				const auto channelInfos = GetAllChannelInfo(channelCounts);
+				if (long(channelInfos.size()) != channelCounts.input + channelCounts.output) return false;
 
 				Log();
 
@@ -550,7 +555,7 @@ namespace ASIOTest {
 						InputFile inputFile(*config.inputFile);
 						const auto inputFileSampleRate = inputFile.SampleRate();
 						if (!targetSampleRate.has_value()) targetSampleRate = inputFileSampleRate;
-						inputFile.Validate(int(*targetSampleRate), ioChannelCounts.second, inputSampleType);
+						inputFile.Validate(int(*targetSampleRate), channelCounts.output, inputSampleType);
 
 						inputData = inputFile.Read();
 					}
@@ -586,7 +591,7 @@ namespace ASIOTest {
 				size_t maxBufferSwitchCount = config.defaultBufferSwitchCount;
 				if (config.bufferSwitchCount.has_value()) maxBufferSwitchCount = *config.bufferSwitchCount;
 				else if (inputData.has_value()) {
-					const auto frameSize = *inputSampleSize * ioChannelCounts.second;
+					const auto frameSize = *inputSampleSize * channelCounts.output;
 					if (inputData->size() % frameSize != 0) throw std::runtime_error("Input ends in the middle of a frame");
 					const auto inputSizeInFrames = inputData->size() / frameSize;
 					maxBufferSwitchCount = inputSizeInFrames / bufferSizeFrames;
@@ -596,11 +601,11 @@ namespace ASIOTest {
 				Log() << "Will stop after " << maxBufferSwitchCount << " buffer switches";
 
 				if (inputData.has_value()) {
-					const auto inputFrameSize = *inputSampleSize * ioChannelCounts.second;
+					const auto inputFrameSize = *inputSampleSize * channelCounts.output;
 					inputData->resize(inputFrameSize * bufferSizeFrames * maxBufferSwitchCount);
 				}
 				if (outputData.has_value()) {
-					const auto outputFrameSize = *outputSampleSize * ioChannelCounts.first;
+					const auto outputFrameSize = *outputSampleSize * channelCounts.input;
 					// Fill the memory to force the operating system to actually commit the pages.
 					outputData->resize(outputFrameSize * bufferSizeFrames * maxBufferSwitchCount, 0x88);
 					outputData->clear();
@@ -629,7 +634,7 @@ namespace ASIOTest {
 					return result;
 				};
 
-				const auto buffers = CreateBuffers(ioChannelCounts, bufferSizeFrames, callbacks.GetASIOCallbacks());
+				const auto buffers = CreateBuffers(channelCounts, bufferSizeFrames, callbacks.GetASIOCallbacks());
 				if (buffers.info.size() == 0) return false;
 
 				enum class Outcome { SUCCESS, FAILURE };
@@ -657,15 +662,15 @@ namespace ASIOTest {
 
 				auto playback = [&](long doubleBufferIndex, size_t bufferOffset) {
 					if (!inputData.has_value() || bufferOffset >= maxBufferSwitchCount) return;
-					const auto interleavedBufferSizeInBytes = ioChannelCounts.second * bufferSizeFrames * *inputSampleSize;
+					const auto interleavedBufferSizeInBytes = channelCounts.output * bufferSizeFrames * *inputSampleSize;
 					const auto inputStart = inputData->data() + bufferOffset * interleavedBufferSizeInBytes;
-					::dechamps_ASIOUtil::CopyFromInterleavedBuffer(buffers.info, false, *inputSampleSize, bufferSizeFrames, doubleBufferIndex, inputStart, ioChannelCounts.second);
+					::dechamps_ASIOUtil::CopyFromInterleavedBuffer(buffers.info, false, *inputSampleSize, bufferSizeFrames, doubleBufferIndex, inputStart, channelCounts.output);
 				};
 				auto record = [&](long doubleBufferIndex) {
 					if (!outputData.has_value()) return;
-					const auto interleavedBufferSizeInBytes = ioChannelCounts.first * bufferSizeFrames * *outputSampleSize;
+					const auto interleavedBufferSizeInBytes = channelCounts.input * bufferSizeFrames * *outputSampleSize;
 					outputData->resize(outputData->size() + interleavedBufferSizeInBytes);
-					::dechamps_ASIOUtil::CopyToInterleavedBuffer(buffers.info, true, *outputSampleSize, bufferSizeFrames, doubleBufferIndex, outputData->data() + outputData->size() - interleavedBufferSizeInBytes, ioChannelCounts.first);
+					::dechamps_ASIOUtil::CopyToInterleavedBuffer(buffers.info, true, *outputSampleSize, bufferSizeFrames, doubleBufferIndex, outputData->data() + outputData->size() - interleavedBufferSizeInBytes, channelCounts.input);
 				};
 
 				auto bufferSwitch = [&](long doubleBufferIndex) {
@@ -704,7 +709,7 @@ namespace ASIOTest {
 				Log();
 
 				GetSampleRate();
-				GetAllChannelInfo(ioChannelCounts);
+				GetAllChannelInfo(channelCounts);
 
 				Log();
 
@@ -740,7 +745,7 @@ namespace ASIOTest {
 				if (outputData.has_value()) {
 					Log() << "Writing output file (" << outputData->size() << " bytes)";
 					try {
-						OutputFile outputFile(*config.outputFile, int(*targetSampleRate), ioChannelCounts.first, *outputSampleType);
+						OutputFile outputFile(*config.outputFile, int(*targetSampleRate), channelCounts.input, *outputSampleType);
 						outputFile.Write(*outputData);
 					}
 					catch (const std::exception& exception) {
