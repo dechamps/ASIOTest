@@ -49,9 +49,9 @@ namespace ASIOTest {
 			std::optional<size_t> bufferSwitchCount;
 			double bufferSwitchDelayMs = 0;
 			bool inhibitOutputReady;
-			std::optional<std::string> inputFile;
+			std::optional<std::string> playbackFromFile;
 			LogMode logMode;
-			std::optional<std::string> outputFile;
+			std::optional<std::string> recordToFile;
 			std::optional<double> sampleRate;
 		};
 
@@ -64,9 +64,9 @@ namespace ASIOTest {
 				("buffer-switch-count", "Stop after this many ASIO buffers have been switched; default is to stop when reaching the end of the input file, if any; otherwise, " + std::to_string(config.defaultBufferSwitchCount), cxxopts::value(config.bufferSwitchCount))
 				("buffer-switch-delay-ms", "Sleep for this many milliseconds before processing a buffer switch callback; default is " + std::to_string(config.bufferSwitchDelayMs), cxxopts::value(config.bufferSwitchDelayMs))
 				("inhibit-output-ready", "Don't call ASIOOutputReady() to inform the driver when the output buffer has been filled.", cxxopts::value(config.inhibitOutputReady))
-				("input-file", "Preload the specified audio file, then play the untouched raw audio buffers to the ASIO driver.", cxxopts::value(config.inputFile))
+				("playback-from-file", "Preload the specified audio file, then play the untouched raw audio buffers to the ASIO driver.", cxxopts::value(config.playbackFromFile))
 				("log-mode", "How to output the log; can be 'none' (do not output the log, maximum performance), 'sync' (output the log synchronously, useful for debugging crashes) or 'async' (output the log asynchronously, useful to prevent slow output from affecting real time operation); default is '" + logMode + "'", cxxopts::value(logMode))
-				("output-file", "Record untouched raw audio buffers from the ASIO driver, then write them to the specified file; output format is WAV for little-endian sample types (ASIOST*LSB), AIFF for big-endian sample types (ASIOST*MSB).", cxxopts::value(config.outputFile))
+				("record-to-file", "Record untouched raw audio buffers from the ASIO driver, then write them to the specified file; output format is WAV for little-endian sample types (ASIOST*LSB), AIFF for big-endian sample types (ASIOST*MSB).", cxxopts::value(config.recordToFile))
 				("sample-rate", "ASIO sample rate to use; default is to use the input file sample rate, if any, otherwise the initial sample rate of the driver", cxxopts::value(config.sampleRate));
 			try {
 				options.parse(argc, argv);
@@ -201,9 +201,9 @@ namespace ASIOTest {
 			throw std::runtime_error(std::string("Unable to determine endianness of sound file: ") + sf_error_number(result));
 		}
 
-		class InputFile {
+		class PlaybackFile {
 		public:
-			InputFile(const std::string_view path) : sndfile(OpenSndfile(path, SFM_READ)) {}
+			PlaybackFile(const std::string_view path) : sndfile(OpenSndfile(path, SFM_READ)) {}
 
 			int SampleRate() const { return sndfile.second.samplerate; }
 
@@ -235,9 +235,9 @@ namespace ASIOTest {
 			const SndfileWithInfo sndfile;
 		};
 
-		class OutputFile {
+		class RecordFile {
 		public:
-			OutputFile(const std::string_view path, const int sampleRate, const int channels, const ASIOSampleType sampleType) :
+			RecordFile(const std::string_view path, const int sampleRate, const int channels, const ASIOSampleType sampleType) :
 				sndfile(OpenSndfile(path, SFM_WRITE, GetSfInfo(sampleRate, channels, sampleType))) {}
 
 			void Write(const std::vector<uint8_t>& interleavedBuffer) {
@@ -543,39 +543,39 @@ namespace ASIOTest {
 
 				auto targetSampleRate = config.sampleRate;
 
-				std::optional<std::vector<uint8_t>> inputData;
-				std::optional<size_t> inputSampleSize;
-				if (config.inputFile.has_value()) {
+				std::optional<std::vector<uint8_t>> playbackData;
+				std::optional<size_t> playbackSampleSize;
+				if (config.playbackFromFile.has_value()) {
 					const auto inputSampleType = GetCommonSampleType(channelInfos, /*input=*/false);
-					inputSampleSize = ::dechamps_ASIOUtil::GetASIOSampleSize(inputSampleType);
-					if (!inputSampleSize.has_value()) throw std::runtime_error("Cannot determine size of input sample type " + ::dechamps_ASIOUtil::GetASIOSampleTypeString(inputSampleType));
+					playbackSampleSize = ::dechamps_ASIOUtil::GetASIOSampleSize(inputSampleType);
+					if (!playbackSampleSize.has_value()) throw std::runtime_error("Cannot determine size of playback sample type " + ::dechamps_ASIOUtil::GetASIOSampleTypeString(inputSampleType));
 
-					Log() << "Loading input file";
+					Log() << "Loading playback file";
 					try {
-						InputFile inputFile(*config.inputFile);
-						const auto inputFileSampleRate = inputFile.SampleRate();
-						if (!targetSampleRate.has_value()) targetSampleRate = inputFileSampleRate;
-						inputFile.Validate(int(*targetSampleRate), channelCounts.output, inputSampleType);
+						PlaybackFile playbackFile(*config.playbackFromFile);
+						const auto playbackSampleRate = playbackFile.SampleRate();
+						if (!targetSampleRate.has_value()) targetSampleRate = playbackSampleRate;
+						playbackFile.Validate(int(*targetSampleRate), channelCounts.output, inputSampleType);
 
-						inputData = inputFile.Read();
+						playbackData = playbackFile.Read();
 					}
 					catch (const std::exception& exception) {
-						throw std::runtime_error(std::string("Cannot input from file: ") + exception.what());
+						throw std::runtime_error(std::string("Cannot playback from file: ") + exception.what());
 					}
-					Log() << "Input file loading complete (" << inputData->size() << " bytes)";
+					Log() << "Playback file loading complete (" << playbackData->size() << " bytes)";
 					Log();
 				}
 
 				if (!targetSampleRate.has_value()) targetSampleRate = *initialSampleRate;
 
-				std::optional<std::vector<uint8_t>> outputData;
-				std::optional<ASIOSampleType> outputSampleType;
-				std::optional<size_t> outputSampleSize;
-				if (config.outputFile.has_value()) {
-					outputSampleType = GetCommonSampleType(channelInfos, /*input=*/true);
-					outputSampleSize = ::dechamps_ASIOUtil::GetASIOSampleSize(*outputSampleType);
-					if (!outputSampleSize.has_value()) throw std::runtime_error("Cannot determine size of output sample type " + ::dechamps_ASIOUtil::GetASIOSampleTypeString(*outputSampleType));
-					outputData.emplace();
+				std::optional<std::vector<uint8_t>> recordData;
+				std::optional<ASIOSampleType> recordSampleType;
+				std::optional<size_t> recordSampleSize;
+				if (config.recordToFile.has_value()) {
+					recordSampleType = GetCommonSampleType(channelInfos, /*input=*/true);
+					recordSampleSize = ::dechamps_ASIOUtil::GetASIOSampleSize(*recordSampleType);
+					if (!recordSampleSize.has_value()) throw std::runtime_error("Cannot determine size of record sample type " + ::dechamps_ASIOUtil::GetASIOSampleTypeString(*recordSampleType));
+					recordData.emplace();
 				}
 
 				if (!CanSampleRate(*targetSampleRate)) return false;
@@ -590,25 +590,25 @@ namespace ASIOTest {
 
 				size_t maxBufferSwitchCount = config.defaultBufferSwitchCount;
 				if (config.bufferSwitchCount.has_value()) maxBufferSwitchCount = *config.bufferSwitchCount;
-				else if (inputData.has_value()) {
-					const auto frameSize = *inputSampleSize * channelCounts.output;
-					if (inputData->size() % frameSize != 0) throw std::runtime_error("Input ends in the middle of a frame");
-					const auto inputSizeInFrames = inputData->size() / frameSize;
+				else if (playbackData.has_value()) {
+					const auto frameSize = *playbackSampleSize * channelCounts.output;
+					if (playbackData->size() % frameSize != 0) throw std::runtime_error("Input ends in the middle of a frame");
+					const auto inputSizeInFrames = playbackData->size() / frameSize;
 					maxBufferSwitchCount = inputSizeInFrames / bufferSizeFrames;
 					if (inputSizeInFrames % bufferSizeFrames != 0) ++maxBufferSwitchCount;
 				}
 				else maxBufferSwitchCount = config.defaultBufferSwitchCount;
 				Log() << "Will stop after " << maxBufferSwitchCount << " buffer switches";
 
-				if (inputData.has_value()) {
-					const auto inputFrameSize = *inputSampleSize * channelCounts.output;
-					inputData->resize(inputFrameSize * bufferSizeFrames * maxBufferSwitchCount);
+				if (playbackData.has_value()) {
+					const auto inputFrameSize = *playbackSampleSize * channelCounts.output;
+					playbackData->resize(inputFrameSize * bufferSizeFrames * maxBufferSwitchCount);
 				}
-				if (outputData.has_value()) {
-					const auto outputFrameSize = *outputSampleSize * channelCounts.input;
+				if (recordData.has_value()) {
+					const auto outputFrameSize = *recordSampleSize * channelCounts.input;
 					// Fill the memory to force the operating system to actually commit the pages.
-					outputData->resize(outputFrameSize * bufferSizeFrames * maxBufferSwitchCount, 0x88);
-					outputData->clear();
+					recordData->resize(outputFrameSize * bufferSizeFrames * maxBufferSwitchCount, 0x88);
+					recordData->clear();
 				}
 
 				Log();
@@ -661,16 +661,16 @@ namespace ASIOTest {
 				};
 
 				auto playback = [&](long doubleBufferIndex, size_t bufferOffset) {
-					if (!inputData.has_value() || bufferOffset >= maxBufferSwitchCount) return;
-					const auto interleavedBufferSizeInBytes = channelCounts.output * bufferSizeFrames * *inputSampleSize;
-					const auto inputStart = inputData->data() + bufferOffset * interleavedBufferSizeInBytes;
-					::dechamps_ASIOUtil::CopyFromInterleavedBuffer(buffers.info, false, *inputSampleSize, bufferSizeFrames, doubleBufferIndex, inputStart, channelCounts.output);
+					if (!playbackData.has_value() || bufferOffset >= maxBufferSwitchCount) return;
+					const auto interleavedBufferSizeInBytes = channelCounts.output * bufferSizeFrames * *playbackSampleSize;
+					const auto inputStart = playbackData->data() + bufferOffset * interleavedBufferSizeInBytes;
+					::dechamps_ASIOUtil::CopyFromInterleavedBuffer(buffers.info, false, *playbackSampleSize, bufferSizeFrames, doubleBufferIndex, inputStart, channelCounts.output);
 				};
 				auto record = [&](long doubleBufferIndex) {
-					if (!outputData.has_value()) return;
-					const auto interleavedBufferSizeInBytes = channelCounts.input * bufferSizeFrames * *outputSampleSize;
-					outputData->resize(outputData->size() + interleavedBufferSizeInBytes);
-					::dechamps_ASIOUtil::CopyToInterleavedBuffer(buffers.info, true, *outputSampleSize, bufferSizeFrames, doubleBufferIndex, outputData->data() + outputData->size() - interleavedBufferSizeInBytes, channelCounts.input);
+					if (!recordData.has_value()) return;
+					const auto interleavedBufferSizeInBytes = channelCounts.input * bufferSizeFrames * *recordSampleSize;
+					recordData->resize(recordData->size() + interleavedBufferSizeInBytes);
+					::dechamps_ASIOUtil::CopyToInterleavedBuffer(buffers.info, true, *recordSampleSize, bufferSizeFrames, doubleBufferIndex, recordData->data() + recordData->size() - interleavedBufferSizeInBytes, channelCounts.input);
 				};
 
 				auto bufferSwitch = [&](long doubleBufferIndex) {
@@ -742,16 +742,16 @@ namespace ASIOTest {
 
 				if (!Stop()) return false;
 
-				if (outputData.has_value()) {
-					Log() << "Writing output file (" << outputData->size() << " bytes)";
+				if (recordData.has_value()) {
+					Log() << "Writing record file (" << recordData->size() << " bytes)";
 					try {
-						OutputFile outputFile(*config.outputFile, int(*targetSampleRate), channelCounts.input, *outputSampleType);
-						outputFile.Write(*outputData);
+						RecordFile recordFile(*config.recordToFile, int(*targetSampleRate), channelCounts.input, *recordSampleType);
+						recordFile.Write(*recordData);
 					}
 					catch (const std::exception& exception) {
-						throw std::runtime_error(std::string("Cannot output to file: ") + exception.what());
+						throw std::runtime_error(std::string("Cannot record to file: ") + exception.what());
 					}
-					Log() << "Output file writing complete";
+					Log() << "Record file writing complete";
 					Log();
 				}
 
