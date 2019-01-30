@@ -223,29 +223,33 @@ namespace ASIOTest {
 			});
 		}
 
-		void CopyToInterleavedBuffer(const std::vector<ASIOBufferInfo>& bufferInfos, bool isInput, const size_t sampleSize, const size_t bufferSizeInSamples, const long doubleBufferIndex, void* const interleavedBuffer, const long interleavedBufferChannelCount) {
+		void CopyToInterleavedBuffer(const std::vector<ASIOBufferInfo>& bufferInfos, bool isInput, const size_t sampleSize, const size_t bufferSizeInSamples, const long doubleBufferIndex, void* const interleavedBuffer, const size_t interleavedBufferChannelCount) {
+			size_t channelOffset = 0;
 			for (const auto& bufferInfo : bufferInfos) {
 				if (!!bufferInfo.isInput != isInput) continue;
 
-				const auto channelNum = bufferInfo.channelNum;
-				assert(channelNum < interleavedBufferChannelCount);
+				if (channelOffset >= interleavedBufferChannelCount) abort();
 				const auto buffer = static_cast<uint8_t*>(bufferInfo.buffers[doubleBufferIndex]);
 
 				for (size_t sampleCount = 0; sampleCount < bufferSizeInSamples; ++sampleCount)
-					memcpy(static_cast<uint8_t*>(interleavedBuffer) + (interleavedBufferChannelCount * sampleCount + channelNum) * sampleSize, buffer + sampleCount * sampleSize, sampleSize);
+					memcpy(static_cast<uint8_t*>(interleavedBuffer) + (interleavedBufferChannelCount * sampleCount + channelOffset) * sampleSize, buffer + sampleCount * sampleSize, sampleSize);
+
+				++channelOffset;
 			}
 		}
 
-		void CopyFromInterleavedBuffer(const std::vector<ASIOBufferInfo>& bufferInfos, bool isInput, const size_t sampleSize, const size_t bufferSizeInSamples, const long doubleBufferIndex, const void* const interleavedBuffer, const long interleavedBufferChannelCount) {
+		void CopyFromInterleavedBuffer(const std::vector<ASIOBufferInfo>& bufferInfos, bool isInput, const size_t sampleSize, const size_t bufferSizeInSamples, const long doubleBufferIndex, const void* const interleavedBuffer, const size_t interleavedBufferChannelCount) {
+			size_t channelOffset = 0;
 			for (const auto& bufferInfo : bufferInfos) {
 				if (!!bufferInfo.isInput != isInput) continue;
 
-				const auto channelNum = bufferInfo.channelNum;
-				assert(channelNum < interleavedBufferChannelCount);
+				if (channelOffset >= interleavedBufferChannelCount) abort();
 				const auto buffer = static_cast<uint8_t*>(bufferInfo.buffers[doubleBufferIndex]);
 
 				for (size_t sampleCount = 0; sampleCount < bufferSizeInSamples; ++sampleCount)
-					memcpy(buffer + sampleCount * sampleSize, static_cast<const uint8_t*>(interleavedBuffer) + (interleavedBufferChannelCount * sampleCount + channelNum) * sampleSize, sampleSize);
+					memcpy(buffer + sampleCount * sampleSize, static_cast<const uint8_t*>(interleavedBuffer) + (interleavedBufferChannelCount * sampleCount + channelOffset) * sampleSize, sampleSize);
+
+				++channelOffset;
 			}
 		}
 
