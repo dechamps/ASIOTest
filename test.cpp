@@ -223,6 +223,32 @@ namespace ASIOTest {
 			});
 		}
 
+		void CopyToInterleavedBuffer(const std::vector<ASIOBufferInfo>& bufferInfos, bool isInput, const size_t sampleSize, const size_t bufferSizeInSamples, const long doubleBufferIndex, void* const interleavedBuffer, const long interleavedBufferChannelCount) {
+			for (const auto& bufferInfo : bufferInfos) {
+				if (!!bufferInfo.isInput != isInput) continue;
+
+				const auto channelNum = bufferInfo.channelNum;
+				assert(channelNum < interleavedBufferChannelCount);
+				const auto buffer = static_cast<uint8_t*>(bufferInfo.buffers[doubleBufferIndex]);
+
+				for (size_t sampleCount = 0; sampleCount < bufferSizeInSamples; ++sampleCount)
+					memcpy(static_cast<uint8_t*>(interleavedBuffer) + (interleavedBufferChannelCount * sampleCount + channelNum) * sampleSize, buffer + sampleCount * sampleSize, sampleSize);
+			}
+		}
+
+		void CopyFromInterleavedBuffer(const std::vector<ASIOBufferInfo>& bufferInfos, bool isInput, const size_t sampleSize, const size_t bufferSizeInSamples, const long doubleBufferIndex, const void* const interleavedBuffer, const long interleavedBufferChannelCount) {
+			for (const auto& bufferInfo : bufferInfos) {
+				if (!!bufferInfo.isInput != isInput) continue;
+
+				const auto channelNum = bufferInfo.channelNum;
+				assert(channelNum < interleavedBufferChannelCount);
+				const auto buffer = static_cast<uint8_t*>(bufferInfo.buffers[doubleBufferIndex]);
+
+				for (size_t sampleCount = 0; sampleCount < bufferSizeInSamples; ++sampleCount)
+					memcpy(buffer + sampleCount * sampleSize, static_cast<const uint8_t*>(interleavedBuffer) + (interleavedBufferChannelCount * sampleCount + channelNum) * sampleSize, sampleSize);
+			}
+		}
+
 		struct SndfileCloser final {
 			void operator()(SNDFILE* const sndfile) {
 				const auto closeError = sf_close(sndfile);
@@ -708,13 +734,13 @@ namespace ASIOTest {
 					if (!playbackData.has_value() || bufferOffset >= maxBufferSwitchCount) return;
 					const auto interleavedBufferSizeInBytes = outputChannels.size() * bufferSizeFrames * *playbackSampleSize;
 					const auto inputStart = playbackData->data() + bufferOffset * interleavedBufferSizeInBytes;
-					::dechamps_ASIOUtil::CopyFromInterleavedBuffer(buffers.info, false, *playbackSampleSize, bufferSizeFrames, doubleBufferIndex, inputStart, long(outputChannels.size()));
+					CopyFromInterleavedBuffer(buffers.info, false, *playbackSampleSize, bufferSizeFrames, doubleBufferIndex, inputStart, long(outputChannels.size()));
 				};
 				auto record = [&](long doubleBufferIndex) {
 					if (!recordData.has_value()) return;
 					const auto interleavedBufferSizeInBytes = inputChannels.size() * bufferSizeFrames * *recordSampleSize;
 					recordData->resize(recordData->size() + interleavedBufferSizeInBytes);
-					::dechamps_ASIOUtil::CopyToInterleavedBuffer(buffers.info, true, *recordSampleSize, bufferSizeFrames, doubleBufferIndex, recordData->data() + recordData->size() - interleavedBufferSizeInBytes, long(inputChannels.size()));
+					CopyToInterleavedBuffer(buffers.info, true, *recordSampleSize, bufferSizeFrames, doubleBufferIndex, recordData->data() + recordData->size() - interleavedBufferSizeInBytes, long(inputChannels.size()));
 				};
 
 				auto bufferSwitch = [&](long doubleBufferIndex) {
