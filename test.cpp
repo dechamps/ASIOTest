@@ -223,10 +223,10 @@ namespace ASIOTest {
 			});
 		}
 
-		void CopyToInterleavedBuffer(const std::vector<ASIOBufferInfo>& bufferInfos, bool isInput, const size_t sampleSize, const size_t bufferSizeInSamples, const long doubleBufferIndex, void* const interleavedBuffer, const size_t interleavedBufferChannelCount) {
+		void CopyToInterleavedBuffer(const std::vector<ASIOBufferInfo>& bufferInfos, const size_t sampleSize, const size_t bufferSizeInSamples, const long doubleBufferIndex, void* const interleavedBuffer, const size_t interleavedBufferChannelCount) {
 			size_t channelOffset = 0;
 			for (const auto& bufferInfo : bufferInfos) {
-				if (!!bufferInfo.isInput != isInput) continue;
+				if (!bufferInfo.isInput) continue;
 
 				if (channelOffset >= interleavedBufferChannelCount) abort();
 				const auto buffer = static_cast<uint8_t*>(bufferInfo.buffers[doubleBufferIndex]);
@@ -238,10 +238,10 @@ namespace ASIOTest {
 			}
 		}
 
-		void CopyFromInterleavedBuffer(const std::vector<ASIOBufferInfo>& bufferInfos, bool isInput, const size_t sampleSize, const size_t bufferSizeInSamples, const long doubleBufferIndex, const void* const interleavedBuffer, const size_t interleavedBufferChannelCount) {
+		void CopyFromInterleavedBuffer(const std::vector<ASIOBufferInfo>& bufferInfos, const size_t sampleSize, const size_t bufferSizeInSamples, const long doubleBufferIndex, const void* const interleavedBuffer, const size_t interleavedBufferChannelCount) {
 			size_t channelOffset = 0;
 			for (const auto& bufferInfo : bufferInfos) {
-				if (!!bufferInfo.isInput != isInput) continue;
+				if (bufferInfo.isInput) continue;
 
 				if (channelOffset >= interleavedBufferChannelCount) abort();
 				const auto buffer = static_cast<uint8_t*>(bufferInfo.buffers[doubleBufferIndex]);
@@ -738,13 +738,13 @@ namespace ASIOTest {
 					if (!playbackData.has_value() || bufferOffset >= maxBufferSwitchCount) return;
 					const auto interleavedBufferSizeInBytes = outputChannels.size() * bufferSizeFrames * *playbackSampleSize;
 					const auto inputStart = playbackData->data() + bufferOffset * interleavedBufferSizeInBytes;
-					CopyFromInterleavedBuffer(buffers.info, false, *playbackSampleSize, bufferSizeFrames, doubleBufferIndex, inputStart, long(outputChannels.size()));
+					CopyFromInterleavedBuffer(buffers.info, *playbackSampleSize, bufferSizeFrames, doubleBufferIndex, inputStart, long(outputChannels.size()));
 				};
 				auto record = [&](long doubleBufferIndex) {
 					if (!recordData.has_value()) return;
 					const auto interleavedBufferSizeInBytes = inputChannels.size() * bufferSizeFrames * *recordSampleSize;
 					recordData->resize(recordData->size() + interleavedBufferSizeInBytes);
-					CopyToInterleavedBuffer(buffers.info, true, *recordSampleSize, bufferSizeFrames, doubleBufferIndex, recordData->data() + recordData->size() - interleavedBufferSizeInBytes, long(inputChannels.size()));
+					CopyToInterleavedBuffer(buffers.info, *recordSampleSize, bufferSizeFrames, doubleBufferIndex, recordData->data() + recordData->size() - interleavedBufferSizeInBytes, long(inputChannels.size()));
 				};
 
 				auto bufferSwitch = [&](long doubleBufferIndex) {
