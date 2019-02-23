@@ -290,7 +290,7 @@ namespace ASIOTest {
 			}
 
 			std::vector<uint8_t> Read() {
-				constexpr auto readSizeBytes = 4096;
+				constexpr auto readSizeBytes = 12 * 1024;  // 12 is the least common multiple of 2 (16-bit), 3 (24-bit) and 4 (32-bit), so the read will always be aligned
 				std::vector<uint8_t> data;
 				for (;;) {
 					data.resize(data.size() + readSizeBytes);
