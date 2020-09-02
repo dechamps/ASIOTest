@@ -802,6 +802,14 @@ namespace ASIOTest {
 
 				Log();
 
+				// List available sample rates while the stream is running.
+				// This can help troubleshoot issues such as https://github.com/dechamps/FlexASIO/issues/66
+				for (const auto sampleRate : { 44100.0, 48000.0, 96000.0, 192000.0 }) {
+					CanSampleRate(sampleRate);
+				}
+
+				Log();
+
 				{
 					ConsoleCtrlHandler consoleCtrlHandler([&](DWORD) {
 						Log() << "Caught control signal, aborting";
