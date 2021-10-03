@@ -598,6 +598,10 @@ namespace ASIOTest {
 
 				Log();
 
+				GetLatencies();
+
+				Log();
+
 				auto initialSampleRate = GetSampleRate();
 				if (!initialSampleRate.has_value()) return false;
 
