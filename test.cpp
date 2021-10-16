@@ -447,7 +447,7 @@ namespace ASIOTest {
 
 			bool ControlPanel() {
 				Log() << "ASIOControlPanel()";
-				return PrintError(ASIOControlPanel()) != ASE_OK;
+				return PrintError(ASIOControlPanel()) == ASE_OK;
 			}
 
 			struct ChannelCounts {
