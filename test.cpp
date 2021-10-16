@@ -55,9 +55,9 @@ namespace ASIOTest {
 			return channelIndices;
 		}
 
-		struct Config {
-			enum class LogMode { NONE, SYNC, ASYNC };
+		enum class LogMode { NONE, SYNC, ASYNC };
 
+		struct Config {
 			// Run enough buffer switches such that we can trigger failure modes like https://github.com/dechamps/FlexASIO/issues/29.
 			static constexpr size_t defaultBufferSwitchCount = 30;
 
@@ -70,6 +70,7 @@ namespace ASIOTest {
 			std::optional<std::vector<long>> outputChannels;
 			std::optional<std::string> playbackFromFile;
 			LogMode logMode;
+			bool verboseLog = false;
 			std::optional<std::string> recordToFile;
 			std::optional<double> sampleRate;
 		};
@@ -89,6 +90,7 @@ namespace ASIOTest {
 				("input-channels", "Comma-separated list of input channel indices (zero-based) to enable; pass \"none\" to disable all input channels; default is to enable all input channels", cxxopts::value(inputChannels))
 				("output-channels", "Comma-separated list of output channel indices (zero-based) to enable; pass \"none\" to disable all output channels; default is to enable all output channels", cxxopts::value(outputChannels))
 				("playback-from-file", "Preload the specified audio file, then play the untouched raw audio buffers to the ASIO driver.", cxxopts::value(config.playbackFromFile))
+				("verbose", "Output a more detailed and more technical log", cxxopts::value(config.verboseLog))
 				("log-mode", "How to output the log; can be 'none' (do not output the log, maximum performance), 'sync' (output the log synchronously, useful for debugging crashes) or 'async' (output the log asynchronously, useful to prevent slow output from affecting real time operation); default is '" + logMode + "'", cxxopts::value(logMode))
 				("record-to-file", "Record untouched raw audio buffers from the ASIO driver, then write them to the specified file; output format is WAV for little-endian sample types (ASIOST*LSB), AIFF for big-endian sample types (ASIOST*MSB).", cxxopts::value(config.recordToFile))
 				("sample-rate", "ASIO sample rate to use; default is to use the input file sample rate, if any, otherwise the initial sample rate of the driver", cxxopts::value(config.sampleRate));
@@ -104,9 +106,9 @@ namespace ASIOTest {
 					if (config.outputChannels->empty() && config.playbackFromFile.has_value()) throw std::runtime_error("Must specify at least one output channel when playing back from a file");
 				}
 
-				if (logMode == "none") config.logMode = Config::LogMode::NONE;
-				else if (logMode == "sync") config.logMode = Config::LogMode::SYNC;
-				else if (logMode == "async") config.logMode = Config::LogMode::ASYNC;
+				if (logMode == "none") config.logMode = LogMode::NONE;
+				else if (logMode == "sync") config.logMode = LogMode::SYNC;
+				else if (logMode == "async") config.logMode = LogMode::ASYNC;
 				else throw std::runtime_error("Invalid --log-mode setting");
 			}
 			catch (const std::exception& exception) {
@@ -118,36 +120,65 @@ namespace ASIOTest {
 			return config;
 		}
 
-		class NoneLogState final {
+		struct LogState final {
 		public:
-			::dechamps_cpplog::LogSink* sink() { return nullptr; }
-		};
+			LogState(bool verbose, LogMode mode) : verbose(verbose) {
+				switch (mode) {
+				case LogMode::NONE:
+					sink.emplace<None>();
+					break;
+				case LogMode::ASYNC:
+					sink.emplace<AsyncStdout>(verbose);
+					break;
+				case LogMode::SYNC:
+					sink.emplace<SyncStdout>(verbose);
+					break;
+				}
+			}
 
-		class SyncLogState final {
-		public:
-			::dechamps_cpplog::LogSink* sink() { return &preamble_sink; }
+			bool isVerbose() const { return verbose;  }
+			::dechamps_cpplog::LogSink* getSink() {
+				return std::visit([](auto& sink) { return sink.sink(); }, sink);
+			}
 
 		private:
-			::dechamps_cpplog::StreamLogSink stream_sink{ std::cout };
-			::dechamps_cpplog::ThreadSafeLogSink thread_safe_sink{ stream_sink };
-			::dechamps_cpplog::PreambleLogSink preamble_sink{ thread_safe_sink };
+			class None final {
+			public:
+				::dechamps_cpplog::LogSink* sink() { return nullptr; }
+			};
+
+			template <typename IntermediateLogSink>
+			class Stdout final {
+			public:
+				explicit Stdout(bool verbose) {
+					if (verbose) preamble_sink.emplace(intermediate_sink);
+				}
+
+				::dechamps_cpplog::LogSink* sink() {
+					if (preamble_sink) return &*preamble_sink;
+					return &intermediate_sink;
+				}
+
+			private:
+				::dechamps_cpplog::StreamLogSink stream_sink{ std::cout };
+				IntermediateLogSink intermediate_sink{ stream_sink };
+				std::optional<::dechamps_cpplog::PreambleLogSink> preamble_sink;
+			};
+			
+			using SyncStdout = Stdout<::dechamps_cpplog::ThreadSafeLogSink>;
+			using AsyncStdout = Stdout<::dechamps_cpplog::AsyncLogSink>;
+
+			const bool verbose;
+			std::variant<None, SyncStdout, AsyncStdout> sink;
 		};
+		static std::optional<LogState> logState;
 
-		class AsyncLogState final {
-		public:
-			::dechamps_cpplog::LogSink* sink() { return &preamble_sink; }
-
-		private:
-			::dechamps_cpplog::StreamLogSink stream_sink{ std::cout };
-			::dechamps_cpplog::AsyncLogSink async_sink{ stream_sink };
-			::dechamps_cpplog::PreambleLogSink preamble_sink{ async_sink };
-		};
-
-		static std::optional<std::variant<NoneLogState, SyncLogState, AsyncLogState>> logState;
-
-		::dechamps_cpplog::Logger Log() {
+		::dechamps_cpplog::Logger Log(bool verbose = true) {
 			if (!logState.has_value()) abort();
-			return ::dechamps_cpplog::Logger(std::visit([](auto& logState) { return logState.sink(); }, *logState));
+			if (verbose && !logState->isVerbose()) return ::dechamps_cpplog::Logger(nullptr);
+			::dechamps_cpplog::Logger::Options loggerOptions;
+			loggerOptions.prependTime = loggerOptions.prependProcessId = loggerOptions.prependThreadId = logState->isVerbose();
+			return ::dechamps_cpplog::Logger(logState->getSink(), loggerOptions);
 		}
 
 		std::vector<long> PopulateChannels(const std::optional<std::vector<long>>& configuredChannels, const long availableChannelCount, const std::string_view label) {
@@ -350,7 +381,11 @@ namespace ASIOTest {
 		};
 
 		ASIOError PrintError(ASIOError error) {
-			Log() << "-> " << ::dechamps_ASIOUtil::GetASIOErrorString(error);
+			const auto errorString = ::dechamps_ASIOUtil::GetASIOErrorString(error);
+			Log(true) << "-> " << errorString;
+			if (error != ASE_OK) {
+				Log(false) << "Driver returned an error: " << errorString;
+			}
 			return error;
 		}
 
@@ -374,11 +409,7 @@ namespace ASIOTest {
 		public:
 			ASIOTest(Config config) : config(std::move(config)) {
 				if (logState.has_value()) abort();
-				switch (config.logMode) {
-				case Config::LogMode::NONE: logState.emplace(std::in_place_type<NoneLogState>); break;
-				case Config::LogMode::SYNC: logState.emplace(std::in_place_type<SyncLogState>); break;
-				case Config::LogMode::ASYNC: logState.emplace(std::in_place_type<AsyncLogState>); break;
-				}
+				logState.emplace(config.verboseLog, config.logMode);
 			}
 			~ASIOTest() {
 				if (!logState.has_value()) abort();
@@ -390,7 +421,7 @@ namespace ASIOTest {
 					return RunInitialized();
 				}
 				catch (const std::exception& exception) {
-					Log() << "FATAL ERROR: " << exception.what();
+					Log(false) << "FATAL ERROR: " << exception.what();
 					return false;
 				}
 			}
@@ -399,10 +430,15 @@ namespace ASIOTest {
 			std::optional<ASIODriverInfo> Init() {
 				ASIODriverInfo asioDriverInfo = { 0 };
 				asioDriverInfo.asioVersion = 2;
+				Log(false) << "Initializing driver...";
 				Log() << "ASIOInit(asioVersion = " << asioDriverInfo.asioVersion << ")";
 				const auto initError = PrintError(ASIOInit(&asioDriverInfo));
 				Log() << "asioVersion = " << asioDriverInfo.asioVersion << " driverVersion = " << asioDriverInfo.asioVersion << " name = " << asioDriverInfo.name << " errorMessage = " << asioDriverInfo.errorMessage << " sysRef = " << asioDriverInfo.sysRef;
-				if (initError != ASE_OK) return std::nullopt;
+				if (initError != ASE_OK) {
+					Log(false) << "...FAILED with error message: " << asioDriverInfo.errorMessage;
+					return std::nullopt;
+				}
+				Log(false) << "...OK, driver name: " << asioDriverInfo.name;
 				return asioDriverInfo;
 			}
 
@@ -417,11 +453,12 @@ namespace ASIOTest {
 			};
 
 			ChannelCounts GetChannels() {
+				Log(false) << "Querying driver for channel count...";
 				Log() << "ASIOGetChannels()";
 				long numInputChannels, numOutputChannels;
 				const auto error = PrintError(ASIOGetChannels(&numInputChannels, &numOutputChannels));
 				if (error != ASE_OK) return { 0, 0 };
-				Log() << "Channel count: " << numInputChannels << " input, " << numOutputChannels << " output";
+				Log(false) << "..." << numInputChannels << " input channels, " << numOutputChannels << " output channels";
 				return { numInputChannels, numOutputChannels };
 			}
 
@@ -433,29 +470,35 @@ namespace ASIOTest {
 			};
 
 			std::optional<BufferSize> GetBufferSize() {
+				Log(false) << "Querying driver for buffer size suggestions...";
 				Log() << "ASIOGetBufferSize()";
 				BufferSize bufferSize;
 				const auto error = PrintError(ASIOGetBufferSize(&bufferSize.min, &bufferSize.max, &bufferSize.preferred, &bufferSize.granularity));
 				if (error != ASE_OK) return std::nullopt;
-				Log() << "Buffer size: min " << bufferSize.min << " max " << bufferSize.max << " preferred " << bufferSize.preferred << " granularity " << bufferSize.granularity;
+				Log(false) << "...suggested buffer sizes (in samples): min " << bufferSize.min << " max " << bufferSize.max << " preferred " << bufferSize.preferred << " granularity " << bufferSize.granularity;
 				return bufferSize;
 			}
 
 			std::optional<ASIOSampleRate> GetSampleRate() {
+				Log(false) << "Querying driver for current sample rate...";
 				Log() << "ASIOGetSampleRate()";
 				ASIOSampleRate sampleRate = NAN;
 				const auto error = PrintError(ASIOGetSampleRate(&sampleRate));
 				if (error != ASE_OK) return std::nullopt;
-				Log() << "Sample rate: " << sampleRate;
+				Log(false) << "...sample rate: " << sampleRate << " Hz";
 				return sampleRate;
 			}
 
 			bool CanSampleRate(ASIOSampleRate sampleRate) {
+				Log(false) << "Asking driver if it can do a " << sampleRate << " Hz sample rate...";
 				Log() << "ASIOCanSampleRate(" << sampleRate << ")";
-				return PrintError(ASIOCanSampleRate(sampleRate)) == ASE_OK;
+				auto can = PrintError(ASIOCanSampleRate(sampleRate)) == ASE_OK;
+				Log(false) << (can ? "...yes it can" : "...no, it can't");
+				return can;
 			}
 
 			bool SetSampleRate(ASIOSampleRate sampleRate) {
+				Log(false) << "Asking driver to switch to a " << sampleRate << " Hz sample rate";
 				Log() << "ASIOSetSampleRate(" << sampleRate << ")";
 				return PrintError(ASIOSetSampleRate(sampleRate)) == ASE_OK;
 			}
@@ -466,12 +509,14 @@ namespace ASIOTest {
 			}
 
 			std::optional<ASIOChannelInfo> GetChannelInfo(long channel, ASIOBool isInput) {
+				Log(false) << "Asking driver for information about " << (isInput ? "input" : "output") << " channel " << channel << "...";
 				Log() << "ASIOGetChannelInfo(channel = " << channel << " isInput = " << isInput << ")";
 				ASIOChannelInfo channelInfo;
 				channelInfo.channel = channel;
 				channelInfo.isInput = isInput;
 				if (PrintError(ASIOGetChannelInfo(&channelInfo)) != ASE_OK) return std::nullopt;
-				Log() << "isActive = " << channelInfo.isActive << " channelGroup = " << channelInfo.channelGroup << " type = " << ::dechamps_ASIOUtil::GetASIOSampleTypeString(channelInfo.type) << " name = " << channelInfo.name;
+				const auto sampleTypeString = ::dechamps_ASIOUtil::GetASIOSampleTypeString(channelInfo.type);
+				Log(false) << "...name `" << channelInfo.name << "`, type " << sampleTypeString << ", " << (channelInfo.isActive ? "" : "in") << "active, group " << channelInfo.channelGroup;
 				return channelInfo;
 			}
 
@@ -516,6 +561,11 @@ namespace ASIOTest {
 					bufferInfo.channelNum = outputChannel;
 				}
 
+				Log(false) << "Asking driver to prepare for streaming with a buffer size of " << bufferSize << " samples and the following channels:";
+				for (const auto& bufferInfo : bufferInfos) {
+					Log(false) << "- " << (bufferInfo.isInput ? "Input" : "Output") << " channel " << bufferInfo.channelNum;
+				}
+
 				Log() << "ASIOCreateBuffers(";
 				for (const auto& bufferInfo : bufferInfos) {
 					Log() << "isInput = " << bufferInfo.isInput << " channelNum = " << bufferInfo.channelNum << " ";
@@ -528,17 +578,20 @@ namespace ASIOTest {
 
 			void GetLatencies() {
 				long inputLatency = LONG_MIN, outputLatency = LONG_MIN;
+				Log(false) << "Querying latencies...";
 				Log() << "ASIOGetLatencies()";
 				if (PrintError(ASIOGetLatencies(&inputLatency, &outputLatency)) != ASE_OK) return;
-				Log() << "Latencies: input " << inputLatency << " samples, output " << outputLatency << " samples";
+				Log(false) << "..." << inputLatency << " samples input latency, " << outputLatency << " samples output latency";
 			}
 
 			bool Start() {
+				Log(false) << "Asking driver to start streaming";
 				Log() << "ASIOStart()";
 				return PrintError(ASIOStart()) == ASE_OK;
 			}
 
 			bool Stop() {
+				Log(false) << "Asking driver to stop streaming";
 				Log() << "ASIOStop()";
 				return PrintError(ASIOStop()) == ASE_OK;
 			}
@@ -597,7 +650,7 @@ namespace ASIOTest {
 			bool RunInitialized() {
 				if (!Init()) return false;
 
-				Log();
+				Log(false);
 
 				if (config.openControlPanel) {
 					return ControlPanel();
@@ -607,11 +660,11 @@ namespace ASIOTest {
 				const auto inputChannels = PopulateChannels(config.inputChannels, availableChannelCounts.input, "Input");
 				const auto outputChannels = PopulateChannels(config.outputChannels, availableChannelCounts.output, "Output");
 
-				Log();
+				Log(false);
 
 				GetLatencies();
 
-				Log();
+				Log(false);
 
 				auto initialSampleRate = GetSampleRate();
 				if (!initialSampleRate.has_value()) return false;
@@ -623,12 +676,12 @@ namespace ASIOTest {
 					}
 				}
 
-				Log();
+				Log(false);
 
 				const auto channelInfos = GetAllChannelInfo(inputChannels, outputChannels);
 				if (channelInfos.size() != inputChannels.size() + outputChannels.size()) return false;
 
-				Log();
+				Log(false);
 
 				auto targetSampleRate = config.sampleRate;
 
@@ -671,7 +724,7 @@ namespace ASIOTest {
 				if (!SetSampleRate(*targetSampleRate)) return false;
 				if (GetSampleRate() != *targetSampleRate) return false;
 
-				Log();
+				Log(false);
 
 				const auto bufferSize = GetBufferSize();
 				if (!bufferSize.has_value()) return false;
@@ -700,7 +753,7 @@ namespace ASIOTest {
 					recordData->clear();
 				}
 
-				Log();
+				Log(false);
 
 				Callbacks callbacks;
 				callbacks.bufferSwitch = [&](long doubleBufferIndex, ASIOBool directProcess) {
@@ -745,7 +798,7 @@ namespace ASIOTest {
 				size_t bufferSwitchCount = 0;
 				const auto incrementBufferSwitchCount = [&] {
 					++bufferSwitchCount;
-					Log() << "Buffer switch count: " << bufferSwitchCount << "/" << maxBufferSwitchCount;
+					Log(false) << "Streaming buffer " << bufferSwitchCount << "/" << maxBufferSwitchCount;
 					if (bufferSwitchCount >= maxBufferSwitchCount) setOutcome(Outcome::SUCCESS);
 				};
 
@@ -795,27 +848,27 @@ namespace ASIOTest {
 					return nullptr;
 				};
 
-				Log();
+				Log(false);
 
 				GetSampleRate();
 				GetAllChannelInfo(inputChannels, outputChannels);
 
-				Log();
+				Log(false);
 
 				GetLatencies();
 
-				Log();
+				Log(false);
 
 				playback(1, 0);
 				if (!config.inhibitOutputReady) {
 					OutputReady();
 					GetLatencies();
-					Log();
+					Log(false);
 				}
 
 				if (!Start()) return false;
 
-				Log();
+				Log(false);
 
 				// List available sample rates while the stream is running.
 				// This can help troubleshoot issues such as https://github.com/dechamps/FlexASIO/issues/66
@@ -823,7 +876,7 @@ namespace ASIOTest {
 					CanSampleRate(sampleRate);
 				}
 
-				Log();
+				Log(false);
 
 				{
 					ConsoleCtrlHandler consoleCtrlHandler([&](DWORD) {
@@ -835,7 +888,7 @@ namespace ASIOTest {
 					outcomeCondition.wait(outcomeLock, [&] { return outcome.has_value();  });
 				}
 
-				Log();
+				Log(false);
 
 				if (!Stop()) return false;
 
@@ -851,6 +904,9 @@ namespace ASIOTest {
 					Log() << "Record file writing complete";
 					Log();
 				}
+
+				Log(false);
+				Log(false) << "Testing complete";
 
 				// Note: we don't call ASIOExit() because it gets confused by our driver setup trickery (see InitAndRun()).
 				return outcome == Outcome::SUCCESS;
