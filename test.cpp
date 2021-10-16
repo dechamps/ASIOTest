@@ -61,6 +61,7 @@ namespace ASIOTest {
 			// Run enough buffer switches such that we can trigger failure modes like https://github.com/dechamps/FlexASIO/issues/29.
 			static constexpr size_t defaultBufferSwitchCount = 30;
 
+			bool openControlPanel = false;
 			std::optional<long> bufferSizeFrames;
 			std::optional<size_t> bufferSwitchCount;
 			double bufferSwitchDelayMs = 0;
@@ -80,6 +81,7 @@ namespace ASIOTest {
 			std::optional<std::string> outputChannels;
 			std::string logMode = "async";
 			options.add_options()
+				("open-control-panel", "Open the ASIO Control Panel, then exit", cxxopts::value(config.openControlPanel))
 				("buffer-size-frames", "ASIO buffer size to use, in frames; default is to use the preferred size suggested by the driver", cxxopts::value(config.bufferSizeFrames))
 				("buffer-switch-count", "Stop after this many ASIO buffers have been switched; default is to stop when reaching the end of the input file, if any; otherwise, " + std::to_string(config.defaultBufferSwitchCount), cxxopts::value(config.bufferSwitchCount))
 				("buffer-switch-delay-ms", "Sleep for this many milliseconds before processing a buffer switch callback; default is " + std::to_string(config.bufferSwitchDelayMs), cxxopts::value(config.bufferSwitchDelayMs))
@@ -404,6 +406,11 @@ namespace ASIOTest {
 				return asioDriverInfo;
 			}
 
+			bool ControlPanel() {
+				Log() << "ASIOControlPanel()";
+				return PrintError(ASIOControlPanel()) != ASE_OK;
+			}
+
 			struct ChannelCounts {
 				long input;
 				long output;
@@ -591,6 +598,10 @@ namespace ASIOTest {
 				if (!Init()) return false;
 
 				Log();
+
+				if (config.openControlPanel) {
+					return ControlPanel();
+				}
 
 				const auto availableChannelCounts = GetChannels();
 				const auto inputChannels = PopulateChannels(config.inputChannels, availableChannelCounts.input, "Input");
