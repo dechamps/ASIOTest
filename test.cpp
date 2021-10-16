@@ -543,7 +543,8 @@ namespace ASIOTest {
 				Buffers(Buffers&&) = default;
 				~Buffers() {
 					if (info.size() == 0) return;
-					Log();
+					Log(false);
+					Log(false) << "Asking driver to exit prepared state";
 					Log() << "ASIODisposeBuffers()";
 					PrintError(ASIODisposeBuffers());
 				}
