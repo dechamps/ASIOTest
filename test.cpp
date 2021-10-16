@@ -418,7 +418,10 @@ namespace ASIOTest {
 
 			bool Run() {
 				try {
-					return RunInitialized();
+					const bool result = RunInitialized();
+					Log(false);
+					Log(false) << "Testing finished with " << (result ? "PASS" : "FAIL") << " result";
+					return result;
 				}
 				catch (const std::exception& exception) {
 					Log(false) << "FATAL ERROR: " << exception.what();
@@ -904,9 +907,6 @@ namespace ASIOTest {
 					Log() << "Record file writing complete";
 					Log();
 				}
-
-				Log(false);
-				Log(false) << "Testing complete";
 
 				// Note: we don't call ASIOExit() because it gets confused by our driver setup trickery (see InitAndRun()).
 				return outcome == Outcome::SUCCESS;
