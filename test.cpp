@@ -20,10 +20,7 @@
 #include <dechamps_ASIOUtil/asiosdk/asio.h>
 #include <dechamps_ASIOUtil/asio.h>
 
-#pragma warning(push)
-#pragma warning(disable:4018 4267)
 #include <cxxopts.hpp>
-#pragma warning(pop)
 
 #include <dechamps_cpputil/endian.h>
 #include <dechamps_cpputil/find.h>
