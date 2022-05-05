@@ -670,10 +670,14 @@ namespace ASIOTest {
 				auto initialSampleRate = GetSampleRate();
 				if (!initialSampleRate.has_value()) return false;
 
-				for (const auto sampleRate : { 44100.0, 48000.0, 96000.0, 192000.0 }) {
-					if (CanSampleRate(sampleRate)) {
-						if (!SetSampleRate(sampleRate)) return false;
-						if (GetSampleRate() != sampleRate) return false;
+				{
+					// Also test weird/invalid sample rates become some applications accidentally try them. See https://github.com/dechamps/FlexASIO/issues/135
+					using SampleRateLimits = std::numeric_limits<ASIOSampleRate>;
+					for (const auto sampleRate : { 44100.0, 48000.0, 96000.0, 192000.0, 0.0, -1.0, 10000000.0 ,SampleRateLimits::quiet_NaN(), SampleRateLimits::lowest(), (SampleRateLimits::max)(), SampleRateLimits::infinity() }) {
+						if (CanSampleRate(sampleRate)) {
+							if (!SetSampleRate(sampleRate)) return false;
+							if (GetSampleRate() != sampleRate) return false;
+						}
 					}
 				}
 
