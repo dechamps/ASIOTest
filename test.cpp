@@ -62,7 +62,7 @@ namespace ASIOTest {
 			std::optional<long> bufferSizeFrames;
 			std::optional<size_t> bufferSwitchCount;
 			double bufferSwitchDelayMs = 0;
-			bool inhibitOutputReady;
+			bool inhibitOutputReady = false;
 			std::optional<std::vector<long>> inputChannels;
 			std::optional<std::vector<long>> outputChannels;
 			std::optional<std::string> playbackFromFile;
