@@ -11,6 +11,7 @@
 #include <thread>
 #include <vector>
 #include <cstdlib>
+#include <semaphore>
 #include <sstream>
 #include <variant>
 
@@ -577,12 +578,13 @@ namespace ASIOTest {
 				return Buffers(bufferInfos);
 			}
 
-			void GetLatencies() {
+			_Check_return_ bool GetLatencies() {
 				long inputLatency = LONG_MIN, outputLatency = LONG_MIN;
 				Log(false) << "Querying latencies...";
 				Log() << "ASIOGetLatencies()";
-				if (PrintError(ASIOGetLatencies(&inputLatency, &outputLatency)) != ASE_OK) return;
+				if (PrintError(ASIOGetLatencies(&inputLatency, &outputLatency)) != ASE_OK) return false;
 				Log(false) << "..." << inputLatency << " samples input latency, " << outputLatency << " samples output latency";
+				return true;
 			}
 
 			bool Start() {
@@ -649,6 +651,12 @@ namespace ASIOTest {
 			};
 
 			bool RunInitialized() {
+				bool successful = true;
+				const auto addFailure = [&] {
+					Log(false) << ">>> TEST RUN WILL BE MARKED AS FAILED";
+					successful = false;
+				};
+
 				if (!Init()) return false;
 
 				Log(false);
@@ -663,7 +671,7 @@ namespace ASIOTest {
 
 				Log(false);
 
-				GetLatencies();
+				if (!GetLatencies()) addFailure();
 
 				Log(false);
 
@@ -784,29 +792,6 @@ namespace ASIOTest {
 				const auto buffers = CreateBuffers(inputChannels, outputChannels, bufferSizeFrames, callbacks.GetASIOCallbacks());
 				if (buffers.info.size() == 0) return false;
 
-				enum class Outcome { SUCCESS, FAILURE };
-
-				std::mutex outcomeMutex;
-				std::optional<Outcome> outcome;
-				std::condition_variable outcomeCondition;
-				const auto setOutcome = [&](Outcome newOutcome) {
-					{
-						std::scoped_lock outcomeLock(outcomeMutex);
-						if (outcome.has_value()) return;
-						outcome = newOutcome;
-					}
-					outcomeCondition.notify_all();
-				};
-
-				if (maxBufferSwitchCount == 0) setOutcome(Outcome::SUCCESS);
-
-				size_t bufferSwitchCount = 0;
-				const auto incrementBufferSwitchCount = [&] {
-					++bufferSwitchCount;
-					Log(false) << "Streaming buffer " << bufferSwitchCount << "/" << maxBufferSwitchCount;
-					if (bufferSwitchCount >= maxBufferSwitchCount) setOutcome(Outcome::SUCCESS);
-				};
-
 				auto playback = [&](long doubleBufferIndex, size_t bufferOffset) {
 					if (!playbackData.has_value() || bufferOffset >= maxBufferSwitchCount) return;
 					const auto interleavedBufferSizeInBytes = outputChannels.size() * bufferSizeFrames * *playbackSampleSize;
@@ -820,6 +805,8 @@ namespace ASIOTest {
 					CopyToInterleavedBuffer(buffers.info, *recordSampleSize, bufferSizeFrames, doubleBufferIndex, recordData->data() + recordData->size() - interleavedBufferSizeInBytes, long(inputChannels.size()));
 				};
 
+				std::counting_semaphore<2> stop(0);
+				size_t bufferSwitchCount = 0;
 				auto bufferSwitch = [&](long doubleBufferIndex) {
 					try {
 						GetSamplePosition();
@@ -833,12 +820,17 @@ namespace ASIOTest {
 						if (!config.inhibitOutputReady) OutputReady();
 						record(doubleBufferIndex);
 
-						incrementBufferSwitchCount();
+						Log(false) << "Streaming buffer " << bufferSwitchCount << "/" << maxBufferSwitchCount;
 					}
 					catch (const std::exception& exception) {
-						Log() << "FATAL ERROR: " << exception.what();
-						setOutcome(Outcome::FAILURE);
+						Log() << "ERROR IN BUFFER SWITCH CALLBACK: " << exception.what();
+						addFailure();
 					}
+					catch (...) {
+						Log() << "UNKNOWN ERROR IN BUFFER SWITCH CALLBACK";
+						addFailure();
+					}
+					if (++bufferSwitchCount == maxBufferSwitchCount) stop.release();
 				};
 
 				callbacks.bufferSwitch = [&](long doubleBufferIndex, ASIOBool directProcess) {
@@ -855,19 +847,19 @@ namespace ASIOTest {
 
 				Log(false);
 
-				GetSampleRate();
+				if (GetSampleRate() != *targetSampleRate) addFailure();
 				GetAllChannelInfo(inputChannels, outputChannels);
 
 				Log(false);
 
-				GetLatencies();
+				if (!GetLatencies()) addFailure();
 
 				Log(false);
 
 				playback(1, 0);
 				if (!config.inhibitOutputReady) {
 					OutputReady();
-					GetLatencies();
+					if (!GetLatencies()) addFailure();
 					Log(false);
 				}
 
@@ -886,11 +878,10 @@ namespace ASIOTest {
 				{
 					ConsoleCtrlHandler consoleCtrlHandler([&](DWORD) {
 						Log() << "Caught control signal, aborting";
-						setOutcome(Outcome::FAILURE);
+						stop.release();
 						return TRUE;
 					});
-					std::unique_lock outcomeLock(outcomeMutex);
-					outcomeCondition.wait(outcomeLock, [&] { return outcome.has_value();  });
+					stop.acquire();
 				}
 
 				Log(false);
@@ -911,7 +902,7 @@ namespace ASIOTest {
 				}
 
 				// Note: we don't call ASIOExit() because it gets confused by our driver setup trickery (see InitAndRun()).
-				return outcome == Outcome::SUCCESS;
+				return successful;
 			}
 
 			const Config config;
