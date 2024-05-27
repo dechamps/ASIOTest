@@ -7,7 +7,7 @@ find_package(dechamps_cpplog CONFIG REQUIRED)
 find_package(dechamps_ASIOUtil CONFIG REQUIRED)
 find_package(sndfile CONFIG REQUIRED)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 add_compile_options(
 	/WX /W4 /permissive- /analyze
 
